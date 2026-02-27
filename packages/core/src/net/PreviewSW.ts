@@ -19,6 +19,7 @@ const MIME_MAP = ${JSON.stringify(getMimeMapForSW())};
 let fsPort = null;
 let fsReady = false;
 let pendingRequests = [];
+let apiHandlerLoaded = false;
 
 // Message handler — receives MessagePort for fs access
 self.addEventListener('message', (event) => {
@@ -30,6 +31,18 @@ self.addEventListener('message', (event) => {
       resolve();
     }
     pendingRequests = [];
+  }
+  if (event.data && event.data.type === 'catalyst-api-code') {
+    try {
+      // Load the API handler code (IIFE that sets self.catalystApiHandler)
+      new Function(event.data.code)();
+      apiHandlerLoaded = typeof self.catalystApiHandler === 'function';
+    } catch (e) {
+      console.error('[Catalyst SW] Failed to load API handler:', e);
+    }
+  }
+  if (event.data && event.data.type === 'catalyst-api-env') {
+    self.__catalystEnv = event.data.env || {};
   }
 });
 
@@ -96,8 +109,11 @@ self.addEventListener('fetch', (event) => {
   // Only intercept same-origin requests
   if (url.origin !== self.location.origin) return;
 
-  // Pass through /api/* routes
+  // Route /api/* through Hono handler if loaded, otherwise pass through
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/api?')) {
+    if (apiHandlerLoaded && typeof self.catalystApiHandler === 'function') {
+      event.respondWith(self.catalystApiHandler(event.request));
+    }
     return;
   }
 

@@ -16,7 +16,8 @@ export type { PackageInfo, PackageManagerConfig, CacheEntry, PackageCacheConfig 
 export type { FetchedPackage, PackageFetcherConfig, ResolvedPackage, NpmResolverConfig } from './pkg/index.js';
 export type { PackageJsonData, LockfileData, LockfileEntry } from './pkg/index.js';
 export { BuildPipeline, ContentHashCache, HMRManager, PassthroughTranspiler, EsbuildTranspiler } from './dev/index.js';
-export type { BuildConfig, BuildResult, BuildError, Transpiler, HMREvent } from './dev/index.js';
+export { HonoIntegration } from './dev/index.js';
+export type { BuildConfig, BuildResult, BuildError, Transpiler, HMREvent, HonoIntegrationConfig, HonoBuildResult } from './dev/index.js';
 export { CatalystWASI } from './wasi/index.js';
 export type { WASIExecConfig, WASIExecResult, CatalystWASIConfig } from './wasi/index.js';
 export { WASIBindings, WASI_ERRNO } from './wasi/index.js';
