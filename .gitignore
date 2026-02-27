@@ -3,3 +3,4 @@ dist/
 *.tsbuildinfo
 .vite/
 spike/__screenshots__/
+index.js
