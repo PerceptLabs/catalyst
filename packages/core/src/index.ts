@@ -17,4 +17,6 @@ export type { FetchedPackage, PackageFetcherConfig, ResolvedPackage, NpmResolver
 export type { PackageJsonData, LockfileData, LockfileEntry } from './pkg/index.js';
 export { BuildPipeline, ContentHashCache, HMRManager, PassthroughTranspiler, EsbuildTranspiler } from './dev/index.js';
 export type { BuildConfig, BuildResult, BuildError, Transpiler, HMREvent } from './dev/index.js';
+export { Catalyst } from './catalyst.js';
+export type { CatalystConfig } from './catalyst.js';
 
