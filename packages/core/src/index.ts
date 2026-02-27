@@ -15,4 +15,6 @@ export { Semver } from './pkg/index.js';
 export type { PackageInfo, PackageManagerConfig, CacheEntry, PackageCacheConfig } from './pkg/index.js';
 export type { FetchedPackage, PackageFetcherConfig, ResolvedPackage, NpmResolverConfig } from './pkg/index.js';
 export type { PackageJsonData, LockfileData, LockfileEntry } from './pkg/index.js';
+export { BuildPipeline, ContentHashCache, HMRManager, PassthroughTranspiler, EsbuildTranspiler } from './dev/index.js';
+export type { BuildConfig, BuildResult, BuildError, Transpiler, HMREvent } from './dev/index.js';
 

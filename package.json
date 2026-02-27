@@ -11,11 +11,12 @@
     "test:watch": "vitest --config vitest.browser.config.ts"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^3.2.0",
     "@vitest/browser": "^3.2.0",
+    "esbuild-wasm": "^0.27.3",
     "playwright": "1.56.1",
-    "tsup": "^8.0.0"
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.0"
   },
   "engines": {
     "node": ">=22.0.0",
