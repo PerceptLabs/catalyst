@@ -12,9 +12,11 @@
  * - This avoids QuickJS handle lifetime issues with host function callbacks
  */
 import type { CatalystFS } from '../fs/CatalystFS.js';
+import type { FetchProxy } from '../net/FetchProxy.js';
 
 export interface EngineConfig {
   fs?: CatalystFS;
+  fetchProxy?: FetchProxy;
   memoryLimit?: number; // MB, default 256
   timeout?: number; // ms, default 30000
   env?: Record<string, string>;
@@ -29,6 +31,7 @@ export class CatalystEngine {
   private runtime: any;
   private module: any;
   private fs?: CatalystFS;
+  private fetchProxy?: FetchProxy;
   private _disposed = false;
   private _builtinsLoaded = false;
   private _fsBindingsInjected = false;
@@ -46,6 +49,7 @@ export class CatalystEngine {
   static async create(config: EngineConfig = {}): Promise<CatalystEngine> {
     const engine = new CatalystEngine();
     engine.fs = config.fs;
+    engine.fetchProxy = config.fetchProxy;
 
     const { getQuickJS } = await import('quickjs-emscripten');
     engine.module = await getQuickJS();
@@ -62,6 +66,12 @@ export class CatalystEngine {
     // Inject host bindings
     engine.injectConsole();
     engine.injectBuiltinModules(config.env);
+
+    // Inject fetch binding if proxy provided
+    if (engine.fetchProxy) {
+      const { injectFetchBinding } = await import('../net/fetch-host-binding.js');
+      injectFetchBinding(engine.context, engine.runtime, engine.fetchProxy);
+    }
 
     return engine;
   }
@@ -387,6 +397,133 @@ globalThis.require = function require(name) {
     const value = this.context.dump(result.value);
     result.value.dispose();
     return value;
+  }
+
+  /**
+   * Evaluate JavaScript code that may use async operations (fetch, etc).
+   * Wraps the code in an async IIFE, waits for all pending operations,
+   * and returns the final result.
+   *
+   * The last expression in the code is automatically transformed into a
+   * return statement so its value is captured.
+   */
+  async evalAsync(code: string, filename = '<eval-async>'): Promise<any> {
+    if (this._disposed) throw new Error('Engine is disposed');
+    await this.loadBuiltins();
+
+    const ctx = this.context;
+
+    // Clear async result container
+    let r = ctx.evalCode(
+      'globalThis.__catalyst_async = { done: false, value: undefined, error: undefined };',
+    );
+    if (r.value) r.value.dispose();
+    if (r.error) r.error.dispose();
+
+    // Transform the code: add `return` to the last expression so the
+    // async function returns it. Then embed directly in an async IIFE.
+    const transformedCode = this.addReturnToLastExpression(code);
+    const wrapped = `(async function() {
+  try {
+    var __v = await (async function() {
+${transformedCode}
+    })();
+    globalThis.__catalyst_async = { done: true, value: __v };
+  } catch (__e) {
+    globalThis.__catalyst_async = { done: true, value: undefined, error: String(__e.message || __e) };
+  }
+})();`;
+
+    const result = ctx.evalCode(wrapped, filename);
+    if (result.error) {
+      const err = ctx.dump(result.error);
+      result.error.dispose();
+      this.emit('error', err);
+      throw new Error(typeof err === 'string' ? err : JSON.stringify(err));
+    }
+    result.value.dispose(); // Promise handle — we read result from the global
+
+    // Execute any immediately resolved microtasks
+    this.runtime.executePendingJobs();
+
+    // Poll for completion (async operations like fetch)
+    const timeout = 30000;
+    const start = Date.now();
+
+    while (true) {
+      const check = ctx.evalCode('globalThis.__catalyst_async.done');
+      let done = false;
+      if (check.value) {
+        done = ctx.dump(check.value) === true;
+        check.value.dispose();
+      }
+      if (check.error) check.error.dispose();
+
+      if (done) break;
+      if (Date.now() - start > timeout) {
+        throw new Error('evalAsync timed out waiting for async operations');
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      this.runtime.executePendingJobs();
+    }
+
+    // Read the result
+    const readResult = ctx.evalCode('globalThis.__catalyst_async');
+    if (readResult.error) {
+      readResult.error.dispose();
+      throw new Error('Failed to read async result');
+    }
+    const resultObj = ctx.dump(readResult.value);
+    readResult.value.dispose();
+
+    if (resultObj.error) {
+      this.emit('error', resultObj.error);
+      throw new Error(resultObj.error);
+    }
+
+    return resultObj.value;
+  }
+
+  /**
+   * Transform code so the last expression statement becomes a return statement.
+   * This allows async IIFEs to return the value of the last expression.
+   */
+  private addReturnToLastExpression(code: string): string {
+    const lines = code.split('\n');
+
+    // Walk backwards to find the last meaningful expression line
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i].trim();
+
+      // Skip empty lines, comments, and closing braces
+      if (
+        !trimmed ||
+        trimmed === '}' ||
+        trimmed === '};' ||
+        trimmed.startsWith('//') ||
+        trimmed.startsWith('/*')
+      ) {
+        continue;
+      }
+
+      // If it starts with a declaration or control-flow keyword, don't transform
+      if (
+        /^(var|let|const|if|else|for|while|do|switch|function|class|try|catch|finally|throw|return|break|continue)\b/.test(
+          trimmed,
+        )
+      ) {
+        break;
+      }
+
+      // It's an expression — wrap it with return
+      const expr = trimmed.replace(/;$/, '');
+      const indent = lines[i].match(/^(\s*)/)?.[1] ?? '';
+      lines[i] = `${indent}return (${expr});`;
+      break;
+    }
+
+    return lines.join('\n');
   }
 
   /**
