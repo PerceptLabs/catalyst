@@ -12,6 +12,7 @@
  */
 import { CatalystEngine } from '../engine/CatalystEngine.js';
 import type { CatalystFS } from '../fs/CatalystFS.js';
+import { CatalystWASI } from '../wasi/CatalystWASI.js';
 import { CatalystProcess, type Signal } from './CatalystProcess.js';
 
 export interface ProcessOptions {
@@ -41,6 +42,44 @@ export class ProcessManager {
   constructor(config: ProcessManagerConfig = {}) {
     this.fs = config.fs;
     this.maxProcesses = config.maxProcesses ?? 32;
+  }
+
+  /**
+   * Execute a WASI binary file from CatalystFS.
+   * Returns collected stdout, stderr, and exit code.
+   */
+  async execWasm(
+    path: string,
+    args: string[] = [],
+    options: ProcessOptions = {},
+  ): Promise<ExecResult> {
+    if (!this.fs) {
+      throw new Error('CatalystFS required for WASI execution');
+    }
+
+    const pid = this.nextPid++;
+    const wasi = CatalystWASI.create({ fs: this.fs });
+
+    try {
+      const result = await wasi.execFile(path, {
+        args: [path, ...args],
+        env: options.env,
+      });
+
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        pid,
+      };
+    } catch (err: any) {
+      return {
+        stdout: '',
+        stderr: err?.message ?? String(err),
+        exitCode: 1,
+        pid,
+      };
+    }
   }
 
   /**

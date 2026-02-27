@@ -17,6 +17,12 @@ export type { FetchedPackage, PackageFetcherConfig, ResolvedPackage, NpmResolver
 export type { PackageJsonData, LockfileData, LockfileEntry } from './pkg/index.js';
 export { BuildPipeline, ContentHashCache, HMRManager, PassthroughTranspiler, EsbuildTranspiler } from './dev/index.js';
 export type { BuildConfig, BuildResult, BuildError, Transpiler, HMREvent } from './dev/index.js';
+export { CatalystWASI } from './wasi/index.js';
+export type { WASIExecConfig, WASIExecResult, CatalystWASIConfig } from './wasi/index.js';
+export { WASIBindings, WASI_ERRNO } from './wasi/index.js';
+export type { WASIConfig } from './wasi/index.js';
+export { BinaryCache } from './wasi/index.js';
+export type { BinaryCacheEntry, BinaryCacheConfig } from './wasi/index.js';
 export { Catalyst } from './catalyst.js';
 export type { CatalystConfig } from './catalyst.js';
 
