@@ -2,9 +2,13 @@
  * CatalystFS — Core filesystem layer
  *
  * Wraps ZenFS to provide a Node.js-like fs API backed by
- * IndexedDB (Phase 1), OPFS (Phase 2), or InMemory.
+ * IndexedDB, OPFS (WebAccess), or InMemory.
+ *
+ * Phase 1: Basic single-mount
+ * Phase 2: Multi-mount + file watching
  */
-import type { CatalystFSConfig } from './types.js';
+import type { CatalystFSConfig, MountConfig, WatchCallback, BackendType } from './types.js';
+import { watch as watchFs, hasNativeObserver } from './FileWatcher.js';
 
 // ZenFS types — we use dynamic imports for configure/fs
 type ZenFSModule = typeof import('@zenfs/core');
@@ -12,6 +16,7 @@ type ZenFSModule = typeof import('@zenfs/core');
 export class CatalystFS {
   private _fs: any;
   private _name: string;
+  private _watchers: Array<() => void> = [];
 
   private constructor(fs: any, name: string) {
     this._fs = fs;
@@ -19,8 +24,43 @@ export class CatalystFS {
   }
 
   /**
-   * Create a new CatalystFS instance.
-   * For Phase 1, uses IndexedDB backend in browser, InMemory in Node.
+   * Resolve a BackendType string to a ZenFS backend config object.
+   */
+  private static async resolveBackend(
+    type: BackendType,
+    name: string
+  ): Promise<any> {
+    const zenfs = await import('@zenfs/core');
+
+    switch (type) {
+      case 'memory':
+        return zenfs.InMemory;
+      case 'opfs': {
+        // Feature-detect OPFS
+        if (typeof navigator?.storage?.getDirectory === 'function') {
+          try {
+            const { WebAccess } = await import('@zenfs/dom');
+            const handle = await navigator.storage.getDirectory();
+            return { backend: WebAccess, handle };
+          } catch {
+            // Fall through to IndexedDB
+          }
+        }
+        // Fallback to IndexedDB
+        const { IndexedDB } = await import('@zenfs/dom');
+        return { backend: IndexedDB, storeName: name };
+      }
+      case 'indexeddb': {
+        const { IndexedDB } = await import('@zenfs/dom');
+        return { backend: IndexedDB, storeName: name };
+      }
+      default:
+        return zenfs.InMemory;
+    }
+  }
+
+  /**
+   * Create a new CatalystFS instance with optional mount configuration.
    */
   static async create(nameOrConfig?: string | CatalystFSConfig): Promise<CatalystFS> {
     const config: CatalystFSConfig =
@@ -33,26 +73,58 @@ export class CatalystFS {
     const zenfs: ZenFSModule = await import('@zenfs/core');
     const { InMemory } = zenfs;
 
-    // Determine which backend to use
+    // Unmount all existing mounts to avoid conflicts (ZenFS global state)
+    try {
+      const { mounts, umount } = zenfs;
+      for (const mountPoint of [...mounts.keys()]) {
+        try {
+          umount(mountPoint);
+        } catch {
+          // Ignore unmount errors
+        }
+      }
+    } catch {
+      // mounts may not be initialized yet
+    }
+
     const isNode =
       typeof globalThis.window === 'undefined' &&
       typeof globalThis.document === 'undefined';
 
-    if (isNode) {
-      // Node environment — always use InMemory
-      await zenfs.configure({ mounts: { '/': InMemory } });
+    if (config.mounts && Object.keys(config.mounts).length > 0) {
+      // Multi-mount configuration
+      const mounts: Record<string, any> = {};
+
+      for (const [mountPath, mountConfig] of Object.entries(config.mounts)) {
+        const backendType: BackendType =
+          typeof mountConfig === 'string'
+            ? mountConfig
+            : mountConfig.backend;
+
+        if (isNode) {
+          // Node: always use InMemory regardless of config
+          mounts[mountPath] = InMemory;
+        } else {
+          mounts[mountPath] = await CatalystFS.resolveBackend(backendType, `${name}-${mountPath}`);
+        }
+      }
+
+      await zenfs.configure({ mounts });
     } else {
-      // Browser environment — use IndexedDB for persistence (Phase 1)
-      try {
-        const { IndexedDB } = await import('@zenfs/dom');
-        await zenfs.configure({
-          mounts: {
-            '/': { backend: IndexedDB, storeName: name },
-          },
-        });
-      } catch {
-        // Fallback to InMemory if IndexedDB unavailable
+      // Default single-mount (backward compat with Phase 1)
+      if (isNode) {
         await zenfs.configure({ mounts: { '/': InMemory } });
+      } else {
+        try {
+          const { IndexedDB } = await import('@zenfs/dom');
+          await zenfs.configure({
+            mounts: {
+              '/': { backend: IndexedDB, storeName: name },
+            },
+          });
+        } catch {
+          await zenfs.configure({ mounts: { '/': InMemory } });
+        }
       }
     }
 
@@ -154,5 +226,42 @@ export class CatalystFS {
 
   async copyFile(src: string, dest: string): Promise<void> {
     return this._fs.promises.copyFile(src, dest);
+  }
+
+  // ---- File Watching ----
+
+  /**
+   * Watch a path for changes.
+   * Uses FileSystemObserver (native) when available, falls back to polling.
+   * Returns an unsubscribe function.
+   */
+  watch(
+    path: string,
+    options: { recursive?: boolean } = {},
+    callback: WatchCallback
+  ): () => void {
+    const unsub = watchFs(this._fs, path, options, callback);
+    this._watchers.push(unsub);
+    return () => {
+      unsub();
+      this._watchers = this._watchers.filter((w) => w !== unsub);
+    };
+  }
+
+  /**
+   * Whether native FileSystemObserver is available in this browser
+   */
+  get hasNativeWatcher(): boolean {
+    return hasNativeObserver();
+  }
+
+  /**
+   * Stop all watchers and release resources.
+   */
+  destroy(): void {
+    for (const unsub of this._watchers) {
+      unsub();
+    }
+    this._watchers = [];
   }
 }
