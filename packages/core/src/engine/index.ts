@@ -1,3 +1,2 @@
-// CatalystEngine — JS Execution layer
-// Implementation in Phase 4
-export {};
+export { CatalystEngine } from './CatalystEngine.js';
+export type { EngineConfig, ConsoleLevel } from './CatalystEngine.js';
