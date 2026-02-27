@@ -1,3 +1,7 @@
 // CatalystProc — Process management layer
-// Implementation in Phase 6
-export {};
+export { ProcessManager } from './ProcessManager.js';
+export { CatalystProcess } from './CatalystProcess.js';
+export type { ProcessOptions, ExecResult, ProcessManagerConfig } from './ProcessManager.js';
+export type { Signal, ProcessState } from './CatalystProcess.js';
+export { getWorkerSource, SIGNALS } from './worker-template.js';
+export type { WorkerMessage, WorkerResponse } from './worker-template.js';
