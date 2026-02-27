@@ -23,6 +23,16 @@ export { WASIBindings, WASI_ERRNO } from './wasi/index.js';
 export type { WASIConfig } from './wasi/index.js';
 export { BinaryCache } from './wasi/index.js';
 export type { BinaryCacheEntry, BinaryCacheConfig } from './wasi/index.js';
+export { SyncClient } from './sync/index.js';
+export type { SyncClientConfig } from './sync/index.js';
+export { SyncServer } from './sync/index.js';
+export type { SyncServerConfig } from './sync/index.js';
+export { OperationJournal } from './sync/index.js';
+export type { JournalConfig } from './sync/index.js';
+export { ConflictResolver, } from './sync/index.js';
+export type { ConflictInfo, ConflictResolution, ConflictStrategy } from './sync/index.js';
+export { PROTOCOL_VERSION, generateOpId } from './sync/index.js';
+export type { FileOperation, SyncMessage, ConnectionState, SyncResult } from './sync/index.js';
 export { Catalyst } from './catalyst.js';
 export type { CatalystConfig } from './catalyst.js';
 
