@@ -27,6 +27,28 @@ importers:
         specifier: ^3.2.0
         version: 3.2.4(@types/node@24.10.15)(@vitest/browser@3.2.4)
 
+  packages/catalyst-workers:
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(postcss@8.5.6)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/catalyst-workers-d1:
+    dependencies:
+      wa-sqlite:
+        specifier: ^1.0.0
+        version: 1.0.0
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(postcss@8.5.6)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/core:
     dependencies:
       '@zenfs/core':
@@ -989,6 +1011,9 @@ packages:
       jsdom:
         optional: true
 
+  wa-sqlite@1.0.0:
+    resolution: {integrity: sha512-Kyybo5/BaJp76z7gDWGk2J6Hthl4NIPsE+swgraEjy3IY6r5zIR02wAs1OJH4XtJp1y3puj3Onp5eMGS0z7nUA==}
+
   why-is-node-running@2.3.0:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
     engines: {node: '>=8'}
@@ -1788,6 +1813,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  wa-sqlite@1.0.0: {}
 
   why-is-node-running@2.3.0:
     dependencies:
