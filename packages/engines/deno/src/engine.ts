@@ -120,7 +120,9 @@ export class DenoEngine implements IEngine {
   }
 
   private evalStub(code: string, _filename: string): unknown {
-    try { return new Function(code)(); }
+    // Use indirect eval to evaluate as script (matches real Deno/V8 semantics).
+    // Script mode returns the value of the last expression, no bare `return`.
+    try { return (0, eval)(code); }
     catch (err) { this.emit('error', err); throw err; }
   }
 }

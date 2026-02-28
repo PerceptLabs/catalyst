@@ -55,7 +55,7 @@ describe('Reaction — Engine Integration', () => {
 
   it('eval works through Reaction', async () => {
     instance = await Reaction.create({ name: `reaction-eval-${Date.now()}` });
-    const result = await instance.eval('return 42');
+    const result = await instance.eval('42');
     expect(result).toBe(42);
   });
 });

@@ -34,22 +34,22 @@ describe('DenoEngine — Stub Mode', () => {
   });
 
   it('eval executes JavaScript via stub', async () => {
-    const result = await engine.eval('return 2 + 3');
+    const result = await engine.eval('2 + 3');
     expect(result).toBe(5);
   });
 
   it('eval handles string expressions', async () => {
-    const result = await engine.eval('return "hello"');
+    const result = await engine.eval('"hello"');
     expect(result).toBe('hello');
   });
 
   it('eval handles objects', async () => {
-    const result = await engine.eval('return { a: 1, b: 2 }');
+    const result = await engine.eval('({a: 1, b: 2})');
     expect(result).toEqual({ a: 1, b: 2 });
   });
 
   it('eval throws on syntax error', async () => {
-    await expect(engine.eval('return {{{'))
+    await expect(engine.eval('{{{'))
       .rejects.toThrow();
   });
 
@@ -84,7 +84,7 @@ describe('DenoEngine — Event System', () => {
 describe('DenoEngine — Lifecycle', () => {
   it('throws after destroy', async () => {
     await engine.destroy();
-    await expect(engine.eval('return 1'))
+    await expect(engine.eval('1'))
       .rejects.toThrow('destroyed');
   });
 
@@ -107,7 +107,7 @@ describe('DenoEngine — createInstance', () => {
       cwd: '/child',
     });
     expect(child).toBeDefined();
-    const result = await child.eval('return 42');
+    const result = await child.eval('42');
     expect(result).toBe(42);
     await child.destroy();
   });
@@ -118,7 +118,7 @@ describe('DenoEngine — createDenoEngine factory', () => {
     const { createDenoEngine } = await import('./engine.js');
     DenoWasmLoader.reset();
     const eng = await createDenoEngine({ env: { X: '1' } });
-    const result = await eng.eval('return 10');
+    const result = await eng.eval('10');
     expect(result).toBe(10);
     await eng.destroy();
   });
