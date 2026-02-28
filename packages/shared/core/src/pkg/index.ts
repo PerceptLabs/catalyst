@@ -11,4 +11,4 @@ export type { FetchedPackage, PackageFetcherConfig } from './PackageFetcher.js';
 export { PackageCache } from './PackageCache.js';
 export type { CacheEntry, PackageCacheConfig } from './PackageCache.js';
 export { PackageManager } from './PackageManager.js';
-export type { PackageInfo, PackageManagerConfig } from './PackageManager.js';
+export type { PackageInfo, PackageManagerConfig, PackageMode } from './PackageManager.js';

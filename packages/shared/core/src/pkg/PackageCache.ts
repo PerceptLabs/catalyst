@@ -94,6 +94,18 @@ export class PackageCache {
     return this.entries.get(name);
   }
 
+  /** Read the cached code for a package (from /node_modules/{name}/index.js) */
+  getCode(name: string): string | null {
+    this.loadMetadata();
+    if (!this.entries.has(name)) return null;
+    const codePath = `${this.basePath}/${name}/index.js`;
+    try {
+      return this.fs.readFileSync(codePath, 'utf-8') as string;
+    } catch {
+      return null;
+    }
+  }
+
   /** Store a package in the cache */
   store(
     name: string,

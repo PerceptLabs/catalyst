@@ -9,6 +9,8 @@ import * as Semver from './Semver.js';
 import { Lockfile } from './Lockfile.js';
 import { PackageJson } from './PackageJson.js';
 import { NpmResolver } from './NpmResolver.js';
+import { PackageManager } from './PackageManager.js';
+import { CatalystFS } from '../fs/CatalystFS.js';
 
 // ---- Semver ----
 
@@ -424,5 +426,279 @@ describe('NpmResolver — with mock registry', () => {
     await resolver.resolve('lodash');
     await resolver.resolve('lodash');
     expect(fetchCount).toBe(1); // Only one fetch due to caching
+  });
+});
+
+// ---- Lockfile Enforcement (Phase 17) ----
+
+/** Helper: compute SHA-256 hash matching PackageManager's format */
+async function sha256(content: string): Promise<string> {
+  const encoded = new TextEncoder().encode(content);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return 'sha256-' + hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function createMockFetcher(packages: Record<string, string>) {
+  return {
+    cdnUrl: 'https://esm.sh',
+    fetchFn: async (url: string) => {
+      // Check for package name in URL
+      for (const [name, code] of Object.entries(packages)) {
+        if (url.includes(name)) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => code,
+            headers: new Headers({ 'x-esm-id': `/${name}@1.0.0` }),
+          } as unknown as Response;
+        }
+      }
+      return { ok: false, status: 404, text: async () => 'Not found' } as unknown as Response;
+    },
+  };
+}
+
+function createMockResolver(packages: Record<string, { version: string; code: string }>) {
+  return {
+    registryUrl: 'https://registry.npmjs.org',
+    fetchFn: async (url: string) => {
+      const name = url.split('/').pop()!;
+      const decodedName = decodeURIComponent(name);
+      const pkg = packages[decodedName];
+      if (!pkg) {
+        return { ok: false, status: 404, json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          name: decodedName,
+          'dist-tags': { latest: pkg.version },
+          versions: {
+            [pkg.version]: {
+              name: decodedName,
+              version: pkg.version,
+              dependencies: {},
+              dist: {
+                tarball: `https://registry.npmjs.org/${decodedName}/-/${decodedName}-${pkg.version}.tgz`,
+                integrity: 'sha256-registry-hash',
+              },
+            },
+          },
+        }),
+      };
+    },
+  };
+}
+
+describe('PackageManager — Dev Mode (lockfile auto-generation)', () => {
+  it('should install and auto-generate lockfile with SHA-256 integrity', async () => {
+    const fs = await CatalystFS.create('pkg-dev-test-1');
+    const code = 'module.exports = { hello: "world" };';
+
+    const pm = new PackageManager({
+      fs,
+      mode: 'dev',
+      resolver: createMockResolver({ 'test-pkg': { version: '1.0.0', code } }),
+      fetcher: createMockFetcher({ 'test-pkg': code }),
+    });
+
+    const info = await pm.install('test-pkg');
+    expect(info.name).toBe('test-pkg');
+    expect(info.version).toBe('1.0.0');
+    expect(info.cached).toBe(false);
+
+    // Lockfile should have been auto-generated
+    const lf = pm.getLockfile();
+    const entry = lf.get('test-pkg');
+    expect(entry).toBeDefined();
+    expect(entry!.version).toBe('1.0.0');
+    expect(entry!.integrity).toMatch(/^sha256-/);
+
+    // Verify integrity matches the actual code
+    const expectedHash = await sha256(code);
+    expect(entry!.integrity).toBe(expectedHash);
+
+    fs.destroy();
+  });
+
+  it('should serve subsequent requests from cache', async () => {
+    const fs = await CatalystFS.create('pkg-dev-test-2');
+    const code = 'module.exports = 42;';
+
+    const pm = new PackageManager({
+      fs,
+      mode: 'dev',
+      resolver: createMockResolver({ cached: { version: '2.0.0', code } }),
+      fetcher: createMockFetcher({ cached: code }),
+    });
+
+    const first = await pm.install('cached');
+    expect(first.cached).toBe(false);
+
+    const second = await pm.install('cached');
+    expect(second.cached).toBe(true);
+    expect(second.version).toBe('2.0.0');
+
+    fs.destroy();
+  });
+
+  it('dev mode is backward-compatible (default mode)', async () => {
+    const fs = await CatalystFS.create('pkg-dev-test-3');
+    const code = 'module.exports = {};';
+
+    // No mode specified — defaults to dev
+    const pm = new PackageManager({
+      fs,
+      resolver: createMockResolver({ compat: { version: '1.0.0', code } }),
+      fetcher: createMockFetcher({ compat: code }),
+    });
+
+    expect(pm.getMode()).toBe('dev');
+    const info = await pm.install('compat');
+    expect(info.name).toBe('compat');
+
+    fs.destroy();
+  });
+});
+
+describe('PackageManager — Locked Mode', () => {
+  it('should throw on missing lockfile', async () => {
+    const fs = await CatalystFS.create('pkg-locked-test-1');
+
+    expect(() => new PackageManager({
+      fs,
+      mode: 'locked',
+    })).toThrow('LOCKFILE_MISSING');
+
+    fs.destroy();
+  });
+
+  it('should resolve from lockfile in locked mode', async () => {
+    const fs = await CatalystFS.create('pkg-locked-test-2');
+    const code = 'module.exports = "locked";';
+    const hash = await sha256(code);
+
+    // Write a lockfile first
+    const lf = new Lockfile();
+    lf.set('locked-pkg', {
+      version: '3.0.0',
+      resolved: 'https://esm.sh/locked-pkg@3.0.0',
+      integrity: hash,
+      dependencies: {},
+    });
+    lf.write(fs, '/catalyst-lock.json');
+
+    const pm = new PackageManager({
+      fs,
+      mode: 'locked',
+      fetcher: createMockFetcher({ 'locked-pkg': code }),
+    });
+
+    const info = await pm.install('locked-pkg');
+    expect(info.name).toBe('locked-pkg');
+    expect(info.version).toBe('3.0.0');
+
+    fs.destroy();
+  });
+
+  it('should reject unknown package in locked mode', async () => {
+    const fs = await CatalystFS.create('pkg-locked-test-3');
+
+    // Write a lockfile with one package
+    const lf = new Lockfile();
+    lf.set('known-pkg', {
+      version: '1.0.0',
+      resolved: '',
+      integrity: '',
+      dependencies: {},
+    });
+    lf.write(fs, '/catalyst-lock.json');
+
+    const pm = new PackageManager({
+      fs,
+      mode: 'locked',
+    });
+
+    await expect(pm.install('unknown-pkg')).rejects.toThrow('LOCKFILE_VIOLATION');
+
+    fs.destroy();
+  });
+
+  it('should throw on integrity hash mismatch', async () => {
+    const fs = await CatalystFS.create('pkg-locked-test-4');
+    const originalCode = 'module.exports = "original";';
+    const tamperedCode = 'module.exports = "tampered";';
+    const originalHash = await sha256(originalCode);
+
+    // Lockfile has hash for original code
+    const lf = new Lockfile();
+    lf.set('tampered-pkg', {
+      version: '1.0.0',
+      resolved: 'https://esm.sh/tampered-pkg@1.0.0',
+      integrity: originalHash,
+      dependencies: {},
+    });
+    lf.write(fs, '/catalyst-lock.json');
+
+    // But fetcher returns tampered code
+    const pm = new PackageManager({
+      fs,
+      mode: 'locked',
+      fetcher: createMockFetcher({ 'tampered-pkg': tamperedCode }),
+    });
+
+    await expect(pm.install('tampered-pkg')).rejects.toThrow('INTEGRITY_MISMATCH');
+
+    fs.destroy();
+  });
+});
+
+describe('Lockfile — Round-trip integrity', () => {
+  it('lockfile survives generate → read → resolve → all hashes match', async () => {
+    const fs = await CatalystFS.create('pkg-roundtrip-test');
+    const codeA = 'module.exports = "a";';
+    const codeB = 'module.exports = "b";';
+    const hashA = await sha256(codeA);
+    const hashB = await sha256(codeB);
+
+    // Step 1: Generate lockfile in dev mode
+    const devPm = new PackageManager({
+      fs,
+      mode: 'dev',
+      resolver: createMockResolver({
+        'pkg-a': { version: '1.0.0', code: codeA },
+        'pkg-b': { version: '2.0.0', code: codeB },
+      }),
+      fetcher: createMockFetcher({ 'pkg-a': codeA, 'pkg-b': codeB }),
+    });
+
+    await devPm.install('pkg-a');
+    await devPm.install('pkg-b');
+
+    // Step 2: Read lockfile back
+    const lockfileContent = fs.readFileSync('/catalyst-lock.json', 'utf-8') as string;
+    const parsed = JSON.parse(lockfileContent);
+    expect(parsed.packages['pkg-a'].integrity).toBe(hashA);
+    expect(parsed.packages['pkg-b'].integrity).toBe(hashB);
+
+    // Step 3: Use in locked mode
+    const lockedPm = new PackageManager({
+      fs,
+      mode: 'locked',
+      fetcher: createMockFetcher({ 'pkg-a': codeA, 'pkg-b': codeB }),
+    });
+
+    // Should succeed — packages are cached with correct integrity
+    const infoA = await lockedPm.install('pkg-a');
+    expect(infoA.cached).toBe(true);
+    expect(infoA.version).toBe('1.0.0');
+
+    const infoB = await lockedPm.install('pkg-b');
+    expect(infoB.cached).toBe(true);
+    expect(infoB.version).toBe('2.0.0');
+
+    fs.destroy();
   });
 });
