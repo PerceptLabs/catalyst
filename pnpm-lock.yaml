@@ -69,6 +69,12 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  packages/shared/compliance:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/shared/core:
     dependencies:
       '@zenfs/core':
