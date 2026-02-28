@@ -1,8 +1,8 @@
 import { defineConfig } from 'vitest/config';
 import path from 'path';
 
-const zenfsCorePath = path.resolve(__dirname, 'packages/core/node_modules/@zenfs/core');
-const zenfsDomPath = path.resolve(__dirname, 'packages/core/node_modules/@zenfs/dom');
+const zenfsCorePath = path.resolve(__dirname, 'packages/shared/core/node_modules/@zenfs/core');
+const zenfsDomPath = path.resolve(__dirname, 'packages/shared/core/node_modules/@zenfs/dom');
 
 export default defineConfig({
   resolve: {
@@ -13,10 +13,10 @@ export default defineConfig({
       { find: '@zenfs/core/promises', replacement: path.join(zenfsCorePath, 'dist/node/promises.js') },
       { find: '@zenfs/core', replacement: zenfsCorePath },
       { find: '@zenfs/dom', replacement: zenfsDomPath },
-      { find: 'quickjs-emscripten', replacement: path.resolve(__dirname, 'packages/core/node_modules/quickjs-emscripten') },
+      { find: 'quickjs-emscripten', replacement: path.resolve(__dirname, 'packages/shared/core/node_modules/quickjs-emscripten') },
       // Workspace packages — resolve to source for testing (dist not built)
-      { find: '@aspect/catalyst-workers-d1', replacement: path.resolve(__dirname, 'packages/catalyst-workers-d1/src/index.ts') },
-      { find: '@aspect/catalyst-workers', replacement: path.resolve(__dirname, 'packages/catalyst-workers/src/index.ts') },
+      { find: '@aspect/catalyst-workers-d1', replacement: path.resolve(__dirname, 'packages/workers/catalyst-workers-d1/src/index.ts') },
+      { find: '@aspect/catalyst-workers', replacement: path.resolve(__dirname, 'packages/workers/catalyst-workers/src/index.ts') },
     ],
   },
   optimizeDeps: {
@@ -31,7 +31,7 @@ export default defineConfig({
   },
   assetsInclude: ['**/*.wasm'],
   test: {
-    include: ['packages/*/src/**/*.browser.test.ts', 'packages/*/test/**/*.browser.test.ts', 'spike/**/*.browser.test.ts'],
+    include: ['packages/*/*/src/**/*.browser.test.ts', 'packages/*/*/test/**/*.browser.test.ts', 'spike/**/*.browser.test.ts'],
     exclude: ['**/node_modules/**'],
     browser: {
       enabled: true,

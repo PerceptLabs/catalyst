@@ -27,7 +27,7 @@ importers:
         specifier: ^3.2.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.15)(@vitest/browser@3.2.4)(jiti@2.6.1)(terser@5.46.0)
 
-  packages/catalyst-astro:
+  packages/adapters/astro:
     dependencies:
       astro:
         specifier: ^4.0.0 || ^5.0.0
@@ -40,7 +40,7 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/catalyst-sveltekit:
+  packages/adapters/sveltekit:
     dependencies:
       '@sveltejs/kit':
         specifier: ^2.0.0
@@ -53,20 +53,14 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/catalyst-workers:
-    devDependencies:
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.6)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-
-  packages/catalyst-workers-d1:
+  packages/distributions/catalyst:
     dependencies:
-      wa-sqlite:
-        specifier: ^1.0.0
-        version: 1.0.0
+      '@aspect/catalyst-core':
+        specifier: workspace:*
+        version: link:../../shared/core
+      '@aspect/catalyst-workers':
+        specifier: workspace:*
+        version: link:../../workers/catalyst-workers
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -75,7 +69,7 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/core:
+  packages/shared/core:
     dependencies:
       '@zenfs/core':
         specifier: ^2.5.0
@@ -100,7 +94,7 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/dev:
+  packages/workers/catalyst-workers:
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -109,7 +103,20 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
-  packages/nitro-preset-catalyst:
+  packages/workers/catalyst-workers-d1:
+    dependencies:
+      wa-sqlite:
+        specifier: ^1.0.0
+        version: 1.0.0
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.6)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/workers/nitro-preset-catalyst:
     dependencies:
       '@aspect/catalyst-workers':
         specifier: workspace:*
@@ -117,15 +124,6 @@ importers:
       nitropack:
         specifier: ^2.0.0
         version: 2.13.1
-    devDependencies:
-      tsup:
-        specifier: ^8.0.0
-        version: 8.5.1(jiti@2.6.1)(postcss@8.5.6)(typescript@5.9.3)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-
-  packages/pkg:
     devDependencies:
       tsup:
         specifier: ^8.0.0

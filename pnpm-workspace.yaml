@@ -1,3 +1,7 @@
 packages:
-  - "packages/*"
+  - "packages/shared/*"
+  - "packages/engines/*"
+  - "packages/workers/*"
+  - "packages/adapters/*"
+  - "packages/distributions/*"
   - "spike"
