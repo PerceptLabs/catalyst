@@ -126,52 +126,184 @@ export class OperationJournal {
   }
 
   /**
-   * Compact the journal — collapse multiple operations on the same path.
+   * Compact the journal — collapse operations to minimal set.
    *
    * Rules:
-   * - Multiple writes to the same path → keep only the last write
-   * - Write then delete → keep only the delete
-   * - Delete then write → keep only the write (file recreated)
-   * - Multiple mkdir → keep only one
-   * - Rename then write to new path → keep rename + write
+   * 1. write → write → write ⟹ final write only
+   * 2. write → delete ⟹ delete only (if file existed before journal start)
+   * 2b. create → write → delete ⟹ nothing (if file didn't exist before)
+   * 3. rename A→B → rename B→C ⟹ rename A→C
+   * 4. write A → rename A→B ⟹ delete A + write B
+   * 5. mkdir → rmdir ⟹ nothing (if dir didn't exist before)
+   *
+   * @param knownPaths - Set of paths known to exist before the journal started.
+   *   When provided, enables Rules 2b and 5 (created-then-deleted elimination).
+   *   Without it, all paths are assumed to pre-exist (safe default).
    */
-  compact(): void {
-    const pathMap = new Map<string, FileOperation[]>();
+  compact(knownPaths?: Set<string>): void {
+    if (this.operations.length === 0) return;
 
-    // Group operations by path
+    const known = knownPaths ?? new Set<string>();
+    const hasKnownPaths = knownPaths !== undefined;
+
+    // Per-path net effect state machine
+    type WrittenState = { type: 'written'; content?: string; created: boolean; timestamp: number; id: string };
+    type DeletedState = { type: 'deleted'; timestamp: number; id: string };
+    type MkdirState = { type: 'mkdir'; created: boolean; timestamp: number; id: string };
+    type NetEffect = WrittenState | DeletedState | MkdirState;
+
+    const pathState = new Map<string, NetEffect>();
+
+    // Rename chains: each entry tracks originalPath → finalPath
+    const renameChains: Array<{
+      from: string;
+      to: string;
+      timestamp: number;
+      id: string;
+    }> = [];
+
     for (const op of this.operations) {
-      const key = op.path;
-      if (!pathMap.has(key)) pathMap.set(key, []);
-      pathMap.get(key)!.push(op);
+      switch (op.type) {
+        case 'write': {
+          const existing = pathState.get(op.path);
+          let created: boolean;
+          if (!hasKnownPaths) {
+            // Without knownPaths, assume all paths pre-existed (safe default)
+            created = false;
+          } else if (existing && existing.type !== 'deleted') {
+            // Preserve the created flag from the existing state
+            created = existing.created;
+          } else {
+            // New path or path was deleted — check if it was known before
+            created = !known.has(op.path);
+          }
+          pathState.set(op.path, {
+            type: 'written',
+            content: op.content,
+            created,
+            timestamp: op.timestamp,
+            id: op.id,
+          });
+          break;
+        }
+
+        case 'delete': {
+          const existing = pathState.get(op.path);
+          if (
+            hasKnownPaths &&
+            existing &&
+            existing.type !== 'deleted' &&
+            existing.created
+          ) {
+            // Rule 2b / Rule 5: created in journal then deleted → nothing
+            pathState.delete(op.path);
+          } else {
+            // Rule 2: existed before → keep the delete
+            pathState.set(op.path, {
+              type: 'deleted',
+              timestamp: op.timestamp,
+              id: op.id,
+            });
+          }
+          break;
+        }
+
+        case 'mkdir': {
+          let created: boolean;
+          if (!hasKnownPaths) {
+            created = false;
+          } else {
+            created = !known.has(op.path);
+          }
+          pathState.set(op.path, {
+            type: 'mkdir',
+            created,
+            timestamp: op.timestamp,
+            id: op.id,
+          });
+          break;
+        }
+
+        case 'rename': {
+          const src = op.path;
+          const dst = op.newPath!;
+          const srcState = pathState.get(src);
+
+          // Check for existing rename chain ending at src
+          const chainIdx = renameChains.findIndex((r) => r.to === src);
+
+          if (srcState && srcState.type === 'written') {
+            // Rule 4: write A → rename A→B ⟹ handle A + write B
+            if (srcState.created) {
+              // A was created in this journal — no need to tell server to delete it
+              pathState.delete(src);
+            } else {
+              // A existed before — server needs to know A is gone
+              pathState.set(src, {
+                type: 'deleted',
+                timestamp: op.timestamp,
+                id: generateOpId(),
+              });
+            }
+            pathState.set(dst, {
+              type: 'written',
+              content: srcState.content,
+              created: hasKnownPaths ? !known.has(dst) : false,
+              timestamp: op.timestamp,
+              id: op.id,
+            });
+
+            // If there was a rename chain ending at src, remove it
+            if (chainIdx >= 0) {
+              renameChains.splice(chainIdx, 1);
+            }
+          } else if (chainIdx >= 0) {
+            // Rule 3: rename chain — extend the existing chain
+            renameChains[chainIdx].to = dst;
+            renameChains[chainIdx].timestamp = op.timestamp;
+            renameChains[chainIdx].id = op.id;
+            pathState.delete(src);
+          } else {
+            // Regular rename — start a new chain
+            renameChains.push({
+              from: src,
+              to: dst,
+              timestamp: op.timestamp,
+              id: op.id,
+            });
+            pathState.delete(src);
+          }
+          break;
+        }
+      }
     }
 
+    // Emit compacted operations
     const compacted: FileOperation[] = [];
 
-    for (const [_path, ops] of pathMap) {
-      if (ops.length === 1) {
-        compacted.push(ops[0]);
-        continue;
+    for (const [path, state] of pathState) {
+      const op: FileOperation = {
+        id: state.id,
+        type: state.type === 'written' ? 'write' : state.type === 'deleted' ? 'delete' : state.type,
+        path,
+        timestamp: state.timestamp,
+      };
+      if (state.type === 'written' && state.content !== undefined) {
+        op.content = state.content;
       }
-
-      // Get the last operation for this path
-      const last = ops[ops.length - 1];
-
-      if (last.type === 'delete') {
-        // Only need the delete
-        compacted.push(last);
-      } else if (last.type === 'write') {
-        // Only need the last write
-        compacted.push(last);
-      } else if (last.type === 'mkdir') {
-        // Only need one mkdir
-        compacted.push(last);
-      } else if (last.type === 'rename') {
-        // Keep the rename
-        compacted.push(last);
-      }
+      compacted.push(op);
     }
 
-    // Sort by timestamp to maintain order
+    for (const chain of renameChains) {
+      compacted.push({
+        id: chain.id,
+        type: 'rename',
+        path: chain.from,
+        newPath: chain.to,
+        timestamp: chain.timestamp,
+      });
+    }
+
     compacted.sort((a, b) => a.timestamp - b.timestamp);
     this.operations = compacted;
     this.save();
