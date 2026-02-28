@@ -14,6 +14,8 @@ export default defineConfig({
       { find: '@zenfs/core', replacement: zenfsCorePath },
       { find: '@zenfs/dom', replacement: zenfsDomPath },
       { find: 'quickjs-emscripten', replacement: path.resolve(__dirname, 'packages/core/node_modules/quickjs-emscripten') },
+      // Workspace packages — resolve to source for testing (dist not built)
+      { find: '@aspect/catalyst-workers', replacement: path.resolve(__dirname, 'packages/catalyst-workers/src/index.ts') },
     ],
   },
   optimizeDeps: {
