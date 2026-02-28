@@ -1,24 +1,33 @@
 /**
- * Node.js Compatibility Matrix — Browser test
+ * Node.js Compatibility Matrix — Browser test (Phase 13a: provider-tagged)
  *
  * Runs Node.js API calls through CatalystEngine in real Chromium.
- * Reports PASS / FAIL / NOT_IMPLEMENTED per method.
- * Generates a compatibility report with percentages.
+ * Reports PASS / FAIL / NOT_IMPLEMENTED per method with provider attribution.
+ * Generates a compatibility report with percentages and provider breakdown.
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { CatalystFS } from '../fs/CatalystFS.js';
 import { CatalystEngine } from '../engine/CatalystEngine.js';
+import { PROVIDER_REGISTRY } from '../engine/host-bindings/unenv-bridge.js';
 
 interface CompatResult {
   module: string;
   method: string;
-  status: 'PASS' | 'FAIL' | 'NOT_IMPLEMENTED';
+  status: 'PASS' | 'FAIL' | 'NOT_IMPLEMENTED' | 'NOT_POSSIBLE';
+  provider: 'catalyst' | 'unenv' | 'stub' | 'not_possible';
 }
 
 const results: CompatResult[] = [];
 
+function getProvider(mod: string, method: string): CompatResult['provider'] {
+  const modRegistry = PROVIDER_REGISTRY[mod];
+  if (!modRegistry) return 'catalyst';
+  return (modRegistry[method] as CompatResult['provider']) || 'catalyst';
+}
+
 function record(module: string, method: string, status: CompatResult['status']) {
-  results.push({ module, method, status });
+  const provider = getProvider(module, method);
+  results.push({ module, method, status, provider });
 }
 
 let engine: CatalystEngine;
@@ -26,7 +35,7 @@ let fs: CatalystFS;
 
 // Shared engine for all compat tests
 const setup = (async () => {
-  fs = await CatalystFS.create('compat-node');
+  fs = await CatalystFS.create('compat-node-' + Date.now());
   fs.writeFileSync('/test.txt', 'hello world');
   fs.mkdirSync('/testdir', { recursive: true });
   fs.writeFileSync('/testdir/a.txt', 'aaa');
@@ -197,7 +206,7 @@ describe('Node.js Compat — assert', () => {
   });
 });
 
-// ---- crypto module ----
+// ---- crypto module (unenv — real hashes) ----
 
 describe('Node.js Compat — crypto', () => {
   it('crypto.randomUUID', async () => {
@@ -206,8 +215,24 @@ describe('Node.js Compat — crypto', () => {
   it('crypto.randomBytes', async () => {
     await testMethod('crypto', 'randomBytes', `require('crypto').randomBytes(16).length`, (r) => r === 16);
   });
-  it('crypto.createHash', async () => {
-    await testMethod('crypto', 'createHash', `require('crypto').createHash('sha256').update('test').digest('hex')`, (r) => typeof r === 'string' && r.length === 64);
+  it('crypto.createHash (SHA-256 litmus)', async () => {
+    await testMethod('crypto', 'createHash', `require('crypto').createHash('sha256').update('hello').digest('hex')`, (r) => r === '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  });
+  it('crypto.createHmac', async () => {
+    await testMethod('crypto', 'createHmac', `require('crypto').createHmac('sha256', 'key').update('data').digest('hex')`, (r) => typeof r === 'string' && r.length === 64);
+  });
+  it('crypto.randomInt', async () => {
+    await testMethod('crypto', 'randomInt', `require('crypto').randomInt(0, 100)`, (r) => typeof r === 'number' && r >= 0 && r < 100);
+  });
+  it('crypto.getHashes', async () => {
+    await testMethod('crypto', 'getHashes', `JSON.stringify(require('crypto').getHashes())`, (r) => { try { const h = JSON.parse(r); return h.includes('sha256'); } catch { return false; } });
+  });
+  it('crypto.timingSafeEqual', async () => {
+    await testMethod('crypto', 'timingSafeEqual', `
+      var c = require('crypto');
+      var a = c.randomBytes(8);
+      c.timingSafeEqual(a, a);
+    `, (r) => r === true);
   });
 });
 
@@ -247,6 +272,131 @@ describe('Node.js Compat — console', () => {
   });
 });
 
+// ---- NEW: os module (unenv) ----
+
+describe('Node.js Compat — os', () => {
+  it('os.platform', async () => {
+    await testMethod('os', 'platform', `require('os').platform()`, (r) => typeof r === 'string');
+  });
+  it('os.arch', async () => {
+    await testMethod('os', 'arch', `require('os').arch()`, (r) => typeof r === 'string');
+  });
+  it('os.tmpdir', async () => {
+    await testMethod('os', 'tmpdir', `require('os').tmpdir()`, (r) => typeof r === 'string');
+  });
+  it('os.hostname', async () => {
+    await testMethod('os', 'hostname', `require('os').hostname()`, (r) => typeof r === 'string');
+  });
+  it('os.cpus', async () => {
+    await testMethod('os', 'cpus', `JSON.stringify(require('os').cpus())`, (r) => { try { return JSON.parse(r).length >= 1; } catch { return false; } });
+  });
+  it('os.EOL', async () => {
+    await testMethod('os', 'EOL', `require('os').EOL`, (r) => r === '\n');
+  });
+  it('os.totalmem', async () => {
+    await testMethod('os', 'totalmem', `require('os').totalmem()`, (r) => typeof r === 'number' && r > 0);
+  });
+  it('os.freemem', async () => {
+    await testMethod('os', 'freemem', `require('os').freemem()`, (r) => typeof r === 'number' && r > 0);
+  });
+  it('os.uptime', async () => {
+    await testMethod('os', 'uptime', `require('os').uptime()`, (r) => typeof r === 'number' && r >= 0);
+  });
+  it('os.type', async () => {
+    await testMethod('os', 'type', `require('os').type()`, (r) => typeof r === 'string');
+  });
+  it('os.homedir', async () => {
+    await testMethod('os', 'homedir', `require('os').homedir()`, (r) => typeof r === 'string');
+  });
+});
+
+// ---- NEW: stream module (unenv) ----
+
+describe('Node.js Compat — stream', () => {
+  it('stream.Readable', async () => {
+    await testMethod('stream', 'Readable', `typeof require('stream').Readable`, (r) => r === 'function');
+  });
+  it('stream.Writable', async () => {
+    await testMethod('stream', 'Writable', `typeof require('stream').Writable`, (r) => r === 'function');
+  });
+  it('stream.Transform', async () => {
+    await testMethod('stream', 'Transform', `typeof require('stream').Transform`, (r) => r === 'function');
+  });
+  it('stream.Duplex', async () => {
+    await testMethod('stream', 'Duplex', `typeof require('stream').Duplex`, (r) => r === 'function');
+  });
+  it('stream.PassThrough', async () => {
+    await testMethod('stream', 'PassThrough', `typeof require('stream').PassThrough`, (r) => r === 'function');
+  });
+  it('stream.Stream', async () => {
+    await testMethod('stream', 'Stream', `typeof require('stream').Stream`, (r) => r === 'function');
+  });
+});
+
+// ---- NEW: http module (unenv) ----
+
+describe('Node.js Compat — http', () => {
+  it('http.STATUS_CODES', async () => {
+    await testMethod('http', 'STATUS_CODES', `require('http').STATUS_CODES[200]`, (r) => r === 'OK');
+  });
+  it('http.IncomingMessage', async () => {
+    await testMethod('http', 'IncomingMessage', `typeof require('http').IncomingMessage`, (r) => r === 'function');
+  });
+  it('http.ServerResponse', async () => {
+    await testMethod('http', 'ServerResponse', `typeof require('http').ServerResponse`, (r) => r === 'function');
+  });
+  it('http.createServer (throws helpful error)', async () => {
+    await testMethod('http', 'createServer',
+      `try { require('http').createServer(); 'no-throw' } catch(e) { e.message.indexOf('not available') >= 0 ? 'correct-error' : 'wrong-error' }`,
+      (r) => r === 'correct-error');
+  });
+});
+
+// ---- NEW: querystring module (unenv) ----
+
+describe('Node.js Compat — querystring', () => {
+  it('querystring.parse', async () => {
+    await testMethod('querystring', 'parse', `JSON.stringify(require('querystring').parse('a=1&b=2'))`, (r) => { try { const p = JSON.parse(r); return p.a === '1' && p.b === '2'; } catch { return false; } });
+  });
+  it('querystring.stringify', async () => {
+    await testMethod('querystring', 'stringify', `require('querystring').stringify({a:'1',b:'2'})`, (r) => typeof r === 'string' && r.includes('a=1'));
+  });
+  it('querystring.escape', async () => {
+    await testMethod('querystring', 'escape', `typeof require('querystring').escape`, (r) => r === 'function');
+  });
+  it('querystring.unescape', async () => {
+    await testMethod('querystring', 'unescape', `typeof require('querystring').unescape`, (r) => r === 'function');
+  });
+});
+
+// ---- NEW: string_decoder module (unenv) ----
+
+describe('Node.js Compat — string_decoder', () => {
+  it('StringDecoder constructor', async () => {
+    await testMethod('string_decoder', 'StringDecoder', `typeof require('string_decoder').StringDecoder`, (r) => r === 'function');
+  });
+});
+
+// ---- NEW: net module (not_possible) ----
+
+describe('Node.js Compat — net (stub)', () => {
+  it('net.connect throws', async () => {
+    await testMethod('net', 'connect',
+      `try { require('net').connect(); 'no-throw' } catch(e) { e.message.indexOf('not available') >= 0 ? 'correct-error' : 'wrong-error' }`,
+      (r) => r === 'correct-error');
+  });
+  it('net.createServer throws', async () => {
+    await testMethod('net', 'createServer',
+      `try { require('net').createServer(); 'no-throw' } catch(e) { e.message.indexOf('not available') >= 0 ? 'correct-error' : 'wrong-error' }`,
+      (r) => r === 'correct-error');
+  });
+  it('net.Socket throws', async () => {
+    await testMethod('net', 'Socket',
+      `try { require('net').Socket(); 'no-throw' } catch(e) { e.message.indexOf('not available') >= 0 ? 'correct-error' : 'wrong-error' }`,
+      (r) => r === 'correct-error');
+  });
+});
+
 // ---- Report ----
 
 afterAll(async () => {
@@ -254,26 +404,47 @@ afterAll(async () => {
   engine.dispose();
   fs.destroy();
 
-  // Generate compatibility report
-  const modules = new Map<string, { pass: number; total: number }>();
+  // Generate provider-tagged compatibility report
+  const modules = new Map<string, {
+    pass: number;
+    total: number;
+    providers: Record<string, number>;
+  }>();
+
   for (const r of results) {
-    if (!modules.has(r.module)) modules.set(r.module, { pass: 0, total: 0 });
+    if (!modules.has(r.module)) {
+      modules.set(r.module, { pass: 0, total: 0, providers: {} });
+    }
     const m = modules.get(r.module)!;
     m.total++;
     if (r.status === 'PASS') m.pass++;
+    m.providers[r.provider] = (m.providers[r.provider] || 0) + 1;
   }
 
   console.log('\n=== Catalyst Node.js Compatibility Report ===');
   let totalPass = 0;
   let totalCount = 0;
-  for (const [name, { pass, total }] of modules) {
+  const globalProviders: Record<string, number> = {};
+
+  for (const [name, { pass, total, providers }] of modules) {
     const pct = ((pass / total) * 100).toFixed(1);
-    console.log(`${name.padEnd(15)} ${pass}/${total} methods (${pct}%)`);
+    const provStr = Object.entries(providers)
+      .map(([p, c]) => `${p}: ${c}`)
+      .join(', ');
+    console.log(`${name.padEnd(18)} ${pass}/${total} (${pct}%)  [${provStr}]`);
     totalPass += pass;
     totalCount += total;
+    for (const [p, c] of Object.entries(providers)) {
+      globalProviders[p] = (globalProviders[p] || 0) + c;
+    }
   }
+
   console.log('---');
   const totalPct = ((totalPass / totalCount) * 100).toFixed(1);
-  console.log(`TOTAL:          ${totalPass}/${totalCount} methods (${totalPct}%)`);
+  console.log(`TOTAL:             ${totalPass}/${totalCount} methods (${totalPct}%)`);
+  const provSummary = Object.entries(globalProviders)
+    .map(([p, c]) => `${p} ${c}`)
+    .join(', ');
+  console.log(`Providers: ${provSummary}`);
   console.log('');
 });

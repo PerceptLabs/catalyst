@@ -13,6 +13,7 @@
  */
 import type { CatalystFS } from '../fs/CatalystFS.js';
 import type { FetchProxy } from '../net/FetchProxy.js';
+import { UNENV_MODULES, STUB_MODULES, getStubModuleSource } from './host-bindings/unenv-bridge.js';
 
 export interface EngineConfig {
   fs?: CatalystFS;
@@ -115,7 +116,9 @@ export class CatalystEngine {
     const engine = this;
 
     // Built-in module source loaders (async — resolved in loadBuiltins())
+    // Resolution order: custom host bindings → unenv-backed → stubs
     this._builtinSources = {
+      // 1. Custom catalyst host bindings
       path: async () => (await import('./host-bindings/path.js')).getPathSource(),
       events: async () => (await import('./host-bindings/events.js')).getEventsSource(),
       buffer: async () => (await import('./host-bindings/buffer.js')).getBufferSource(),
@@ -123,9 +126,18 @@ export class CatalystEngine {
       assert: async () => (await import('./host-bindings/assert.js')).getAssertSource(),
       util: async () => (await import('./host-bindings/util.js')).getUtilSource(),
       url: async () => (await import('./host-bindings/url.js')).getUrlSource(),
-      crypto: async () => (await import('./host-bindings/crypto.js')).getCryptoSource(),
       timers: async () => (await import('./host-bindings/timers.js')).getTimersSource(),
     };
+
+    // 2. unenv-backed modules (crypto, os, stream, http, querystring, string_decoder, zlib)
+    for (const [name, getSource] of Object.entries(UNENV_MODULES)) {
+      this._builtinSources[name] = async () => getSource();
+    }
+
+    // 3. Stub modules (net, tls, dns, etc. — clear error messages)
+    for (const name of STUB_MODULES) {
+      this._builtinSources[name] = async () => getStubModuleSource(name);
+    }
 
     // Initialize the module registry inside QuickJS
     const initResult = ctx.evalCode(`globalThis.__catalyst_modules = {};`);

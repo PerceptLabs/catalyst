@@ -70,8 +70,8 @@ describe('Host Binding Sources', () => {
   });
 
   it('crypto module source should define randomBytes', async () => {
-    const { getCryptoSource } = await import('./host-bindings/crypto.js');
-    const src = getCryptoSource();
+    const { getUnenvCryptoSource } = await import('./host-bindings/unenv-bridge.js');
+    const src = getUnenvCryptoSource();
     expect(src).toContain('randomBytes');
     expect(src).toContain('randomUUID');
     expect(src).toContain('createHash');
