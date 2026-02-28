@@ -67,6 +67,23 @@ export class CatalystProcess {
     });
   }
 
+  /** Push stdout data from Worker bridge */
+  _pushStdout(data: string): void {
+    this._stdoutChunks.push(data);
+    this._emit('stdout', data);
+  }
+
+  /** Push stderr data from Worker bridge */
+  _pushStderr(data: string): void {
+    this._stderrChunks.push(data);
+    this._emit('stderr', data);
+  }
+
+  /** Set state directly (used by Worker flow which doesn't have an engine reference) */
+  _setState(state: ProcessState): void {
+    this._state = state;
+  }
+
   /** Mark this process as exited with the given code */
   _exit(code: number): void {
     if (this._state !== 'running' && this._state !== 'starting') return;

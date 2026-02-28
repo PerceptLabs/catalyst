@@ -1,19 +1,29 @@
 /**
  * ProcessManager — Manages sandboxed child processes
  *
- * Each child process runs in its own CatalystEngine instance,
- * providing isolated JavaScript execution with optional CatalystFS access.
+ * Phase 13c: Worker-based isolation with inline fallback.
+ *
+ * Each child process runs in its own Web Worker with its own QuickJS-WASM
+ * instance, providing true thread-level isolation. If Workers are unavailable
+ * (sandboxed environments), falls back to inline CatalystEngine on the main
+ * thread.
  *
  * Features:
  * - exec(): Run code, wait for completion, return stdout/stderr
  * - spawn(): Start code, stream stdout/stderr in real-time
- * - kill(): Send signals to running processes
+ * - kill(): SIGTERM via MessagePort, SIGKILL via Worker.terminate()
  * - Process tree management (PID tracking, listing)
+ * - WorkerPool with configurable maxWorkers limit
+ * - StdioBatcher for efficient Worker→main thread stdio
+ * - CatalystFS access from Workers via MessagePort proxy
  */
 import { CatalystEngine } from '../engine/CatalystEngine.js';
 import type { CatalystFS } from '../fs/CatalystFS.js';
 import { CatalystWASI } from '../wasi/CatalystWASI.js';
 import { CatalystProcess, type Signal } from './CatalystProcess.js';
+import { WorkerPool } from './WorkerPool.js';
+import { WorkerBridge } from './WorkerBridge.js';
+import { SIGNALS } from './worker-template.js';
 
 export interface ProcessOptions {
   cwd?: string;
@@ -31,17 +41,25 @@ export interface ExecResult {
 export interface ProcessManagerConfig {
   fs?: CatalystFS;
   maxProcesses?: number; // default 32
+  maxWorkers?: number; // default 8 — WorkerPool limit
+  /** Force inline mode (skip Worker detection) */
+  forceInline?: boolean;
 }
 
 export class ProcessManager {
   private nextPid = 1;
   private processes = new Map<number, CatalystProcess>();
+  private bridges = new Map<number, WorkerBridge>();
   private fs?: CatalystFS;
   private maxProcesses: number;
+  private pool: WorkerPool;
+  private forceInline: boolean;
 
   constructor(config: ProcessManagerConfig = {}) {
     this.fs = config.fs;
     this.maxProcesses = config.maxProcesses ?? 32;
+    this.forceInline = config.forceInline ?? false;
+    this.pool = new WorkerPool({ maxWorkers: config.maxWorkers ?? 8 });
   }
 
   /**
@@ -115,7 +133,7 @@ export class ProcessManager {
   /**
    * Spawn a new process that runs the given code.
    * Returns immediately with a CatalystProcess handle.
-   * The process runs asynchronously.
+   * Tries Worker-based isolation first, falls back to inline.
    */
   spawn(code: string, options: ProcessOptions = {}): CatalystProcess {
     if (this.processes.size >= this.maxProcesses) {
@@ -133,7 +151,7 @@ export class ProcessManager {
     });
 
     // Start the process asynchronously
-    this.startProcess(proc, code, options).catch((err) => {
+    this.startProcess(proc, code, options).catch(() => {
       // If start fails, mark as exited with error
       if (proc.state === 'starting' || proc.state === 'running') {
         proc._exit(1);
@@ -143,15 +161,76 @@ export class ProcessManager {
     return proc;
   }
 
-  /** Start a process by creating an isolated engine and running code */
+  /**
+   * Start a process — tries Worker first, falls back to inline.
+   */
   private async startProcess(
     proc: CatalystProcess,
     code: string,
     options: ProcessOptions,
   ): Promise<void> {
-    // Check if process was already killed before we start
     if (proc.state === 'killed' || proc.state === 'exited') return;
 
+    // Try Worker-based isolation first (unless forced inline)
+    if (!this.forceInline) {
+      const canUseWorker = await this.pool.isWorkerSupported();
+      if (canUseWorker) {
+        try {
+          await this.startWorkerProcess(proc, code, options);
+          return;
+        } catch {
+          // Worker failed — fall through to inline
+          console.warn(
+            '[catalyst] Worker process failed, falling back to inline mode',
+          );
+        }
+      }
+    }
+
+    // Fallback: inline CatalystEngine on the main thread
+    await this.startInlineProcess(proc, code, options);
+  }
+
+  /** Start a process in a Web Worker (true thread isolation) */
+  private async startWorkerProcess(
+    proc: CatalystProcess,
+    code: string,
+    _options: ProcessOptions,
+  ): Promise<void> {
+    const handle = this.pool.spawn(proc.pid);
+    const bridge = new WorkerBridge(handle, this.fs);
+    this.bridges.set(proc.pid, bridge);
+
+    // Wait for QuickJS to boot in the Worker
+    await bridge.waitReady();
+
+    if (proc.state === 'killed' || proc.state === 'exited') {
+      this.pool.terminate(proc.pid);
+      this.bridges.delete(proc.pid);
+      return;
+    }
+
+    proc._setState('running');
+
+    // Execute code, streaming stdio back
+    const result = await bridge.exec(code, {
+      onStdout: (data) => proc._pushStdout(data),
+      onStderr: (data) => proc._pushStderr(data),
+    });
+
+    if (proc.state === 'running') {
+      proc._exit(result.exitCode);
+    }
+    this.pool.release(proc.pid);
+    this.bridges.delete(proc.pid);
+  }
+
+  /** Start a process inline on the main thread (fallback) */
+  private async startInlineProcess(
+    proc: CatalystProcess,
+    code: string,
+    options: ProcessOptions,
+  ): Promise<void> {
     try {
       const engine = await CatalystEngine.create({
         fs: this.fs,
@@ -172,13 +251,13 @@ export class ProcessManager {
         if (proc.state === 'running') {
           proc._exit(0);
         }
-      } catch (err: any) {
-        // Runtime error — collect error in stderr
+      } catch {
+        // Runtime error
         if (proc.state === 'running') {
           proc._exit(1);
         }
       }
-    } catch (err: any) {
+    } catch {
       // Engine creation failed
       proc._exit(1);
     }
@@ -188,6 +267,17 @@ export class ProcessManager {
   kill(pid: number, signal: Signal = 'SIGTERM'): boolean {
     const proc = this.processes.get(pid);
     if (!proc) return false;
+
+    // For Worker-based processes, use Worker.terminate() for SIGKILL
+    if (signal === 'SIGKILL') {
+      this.pool.terminate(pid);
+      this.bridges.delete(pid);
+    } else {
+      // SIGTERM — send via MessagePort for graceful shutdown
+      const signalNum = SIGNALS[signal] ?? 15;
+      this.pool.signal(pid, signalNum);
+    }
+
     return proc.kill(signal);
   }
 
@@ -209,10 +299,15 @@ export class ProcessManager {
   /** Kill all running processes */
   killAll(signal: Signal = 'SIGTERM'): void {
     for (const proc of this.processes.values()) {
-      if (proc.state === 'running') {
-        proc.kill(signal);
+      if (proc.state === 'running' || proc.state === 'starting') {
+        this.kill(proc.pid, signal);
       }
     }
+  }
+
+  /** Clean up all Workers and resources */
+  dispose(): void {
+    this.pool.dispose();
   }
 
   /** Get the number of currently tracked processes */
@@ -223,5 +318,10 @@ export class ProcessManager {
   /** Get the number of running processes */
   get runningCount(): number {
     return this.listRunning().length;
+  }
+
+  /** Get the WorkerPool for inspection */
+  get workerPool(): WorkerPool {
+    return this.pool;
   }
 }

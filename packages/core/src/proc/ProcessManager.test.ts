@@ -1,11 +1,13 @@
 /**
  * ProcessManager — Node tests
+ *
  * Tests process tree logic, signal handling state machine, stdio buffering,
- * and worker template generation.
+ * worker template generation, StdioBatcher logic, and new Worker methods.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { CatalystProcess, type Signal, type ProcessState } from './CatalystProcess.js';
-import { getWorkerSource, SIGNALS } from './worker-template.js';
+import { getWorkerSource, getEnhancedWorkerSource, SIGNALS } from './worker-template.js';
+import { StdioBatcher } from './StdioBatcher.js';
 
 describe('CatalystProcess — State Machine', () => {
   it('should start in "starting" state', () => {
@@ -33,7 +35,6 @@ describe('CatalystProcess — State Machine', () => {
 
   it('should transition to "killed" state on SIGTERM', () => {
     const proc = new CatalystProcess(3);
-    // Simulate engine attachment
     proc._setEngine({ on: () => {}, dispose: () => {} } as any);
     proc.kill('SIGTERM');
     expect(proc.state).toBe('killed');
@@ -99,7 +100,6 @@ describe('CatalystProcess — Events', () => {
     let count = 0;
     proc.once('exit', () => count++);
     proc._exit(0);
-    // Can't fire again since process already exited, but once should only fire once
     expect(count).toBe(1);
   });
 
@@ -117,7 +117,6 @@ describe('CatalystProcess — Events', () => {
 describe('CatalystProcess — Stdio Buffering', () => {
   it('should collect stdout chunks', () => {
     const proc = new CatalystProcess(20);
-    // Simulate engine console events
     const consoleHandlers: any[] = [];
     proc._setEngine({
       on: (event: string, handler: any) => {
@@ -126,7 +125,6 @@ describe('CatalystProcess — Stdio Buffering', () => {
       dispose: () => {},
     } as any);
 
-    // Simulate console.log calls
     for (const handler of consoleHandlers) {
       handler('log', 'hello');
       handler('log', 'world');
@@ -176,6 +174,45 @@ describe('CatalystProcess — Stdio Buffering', () => {
   });
 });
 
+describe('CatalystProcess — Worker methods', () => {
+  it('_pushStdout should append to stdout', () => {
+    const proc = new CatalystProcess(50);
+    proc._pushStdout('line 1\n');
+    proc._pushStdout('line 2\n');
+    expect(proc.stdout).toBe('line 1\nline 2\n');
+  });
+
+  it('_pushStderr should append to stderr', () => {
+    const proc = new CatalystProcess(51);
+    proc._pushStderr('err 1\n');
+    proc._pushStderr('err 2\n');
+    expect(proc.stderr).toBe('err 1\nerr 2\n');
+  });
+
+  it('_pushStdout should emit stdout event', () => {
+    const proc = new CatalystProcess(52);
+    const chunks: string[] = [];
+    proc.on('stdout', (data: string) => chunks.push(data));
+    proc._pushStdout('hello\n');
+    expect(chunks).toEqual(['hello\n']);
+  });
+
+  it('_pushStderr should emit stderr event', () => {
+    const proc = new CatalystProcess(53);
+    const chunks: string[] = [];
+    proc.on('stderr', (data: string) => chunks.push(data));
+    proc._pushStderr('error\n');
+    expect(chunks).toEqual(['error\n']);
+  });
+
+  it('_setState should update state', () => {
+    const proc = new CatalystProcess(54);
+    expect(proc.state).toBe('starting');
+    proc._setState('running');
+    expect(proc.state).toBe('running');
+  });
+});
+
 describe('CatalystProcess — Uptime', () => {
   it('should track uptime', async () => {
     const proc = new CatalystProcess(30);
@@ -185,13 +222,30 @@ describe('CatalystProcess — Uptime', () => {
 });
 
 describe('Worker Template', () => {
-  it('should generate valid worker source code', () => {
+  it('should generate valid simple worker source', () => {
     const source = getWorkerSource();
     expect(typeof source).toBe('string');
     expect(source.length).toBeGreaterThan(100);
     expect(source).toContain('quickjs-emscripten');
     expect(source).toContain('self.postMessage');
     expect(source).toContain('self.addEventListener');
+  });
+
+  it('should generate valid enhanced worker source', () => {
+    const source = getEnhancedWorkerSource();
+    expect(typeof source).toBe('string');
+    expect(source.length).toBeGreaterThan(100);
+    expect(source).toContain('quickjs-emscripten');
+    expect(source).toContain('stdioPort');
+    expect(source).toContain('controlPort');
+    expect(source).toContain('fsPort');
+    expect(source).toContain('flushStdio');
+    expect(source).toContain('pushStdout');
+    expect(source).toContain('pushStderr');
+    expect(source).toContain('BATCH_BYTES');
+    expect(source).toContain('BATCH_MS');
+    expect(source).toContain('stdout-batch');
+    expect(source).toContain('stderr-batch');
   });
 
   it('should define signal numbers', () => {
@@ -220,5 +274,146 @@ describe('Process States', () => {
     proc3._setEngine({ on: () => {}, dispose: () => {} } as any);
     proc3.kill('SIGTERM');
     expect(proc3.state).toBe('killed');
+
+    // starting → running (via _setState for Worker flow)
+    const proc4 = new CatalystProcess(43);
+    proc4._setState('running');
+    expect(proc4.state).toBe('running');
+  });
+});
+
+describe('StdioBatcher', () => {
+  it('should batch stdout chunks', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchMs: 100 }, // long enough that timer won't fire during test
+    );
+
+    batcher.pushStdout('line 1\n');
+    batcher.pushStdout('line 2\n');
+
+    // Nothing flushed yet (under byte threshold, timer hasn't fired)
+    expect(flushes).toHaveLength(0);
+    expect(batcher.pendingStdoutChunks).toBe(2);
+
+    // Explicit flush
+    batcher.flush();
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].stream).toBe('stdout');
+    expect(flushes[0].chunks).toEqual(['line 1\n', 'line 2\n']);
+    expect(batcher.pendingStdoutChunks).toBe(0);
+  });
+
+  it('should batch stderr chunks', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchMs: 100 },
+    );
+
+    batcher.pushStderr('err 1\n');
+    batcher.pushStderr('err 2\n');
+    batcher.flush();
+
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].stream).toBe('stderr');
+    expect(flushes[0].chunks).toEqual(['err 1\n', 'err 2\n']);
+  });
+
+  it('should flush on byte threshold', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchBytes: 20, batchMs: 10000 },
+    );
+
+    // Push enough data to exceed 20 bytes
+    batcher.pushStdout('12345678901234567890X'); // 21 bytes
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].chunks).toHaveLength(1);
+  });
+
+  it('should flush on time threshold', async () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchMs: 10 },
+    );
+
+    batcher.pushStdout('hello\n');
+    expect(flushes).toHaveLength(0);
+
+    // Wait for timer
+    await new Promise((r) => setTimeout(r, 30));
+    expect(flushes).toHaveLength(1);
+    expect(flushes[0].chunks).toEqual(['hello\n']);
+  });
+
+  it('should flush both streams on end()', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchMs: 10000 },
+    );
+
+    batcher.pushStdout('out\n');
+    batcher.pushStderr('err\n');
+    batcher.end();
+
+    expect(flushes).toHaveLength(2);
+    expect(flushes[0].stream).toBe('stdout');
+    expect(flushes[1].stream).toBe('stderr');
+  });
+
+  it('should not lose data on rapid push + end', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchMs: 10000 },
+    );
+
+    for (let i = 0; i < 100; i++) {
+      batcher.pushStdout(`line ${i}\n`);
+    }
+    batcher.end();
+
+    const allChunks = flushes
+      .filter((f) => f.stream === 'stdout')
+      .flatMap((f) => f.chunks);
+    expect(allChunks).toHaveLength(100);
+    expect(allChunks[0]).toBe('line 0\n');
+    expect(allChunks[99]).toBe('line 99\n');
+  });
+
+  it('should report pending bytes', () => {
+    const batcher = new StdioBatcher(() => {}, { batchMs: 10000 });
+    batcher.pushStdout('hello'); // 5 bytes
+    batcher.pushStderr('world'); // 5 bytes
+    expect(batcher.pendingBytes).toBe(10);
+    batcher.flush();
+    expect(batcher.pendingBytes).toBe(0);
+  });
+
+  it('should batch 200 lines into fewer flushes', () => {
+    const flushes: Array<{ stream: string; chunks: string[] }> = [];
+    const batcher = new StdioBatcher(
+      (stream, chunks) => flushes.push({ stream, chunks }),
+      { batchBytes: 4096, batchMs: 10000 },
+    );
+
+    // 200 lines of ~20 chars each ≈ 4000 bytes → should trigger ~1 byte-threshold flush
+    for (let i = 0; i < 200; i++) {
+      batcher.pushStdout(`test line number ${i}\n`);
+    }
+    batcher.end();
+
+    const totalChunks = flushes
+      .filter((f) => f.stream === 'stdout')
+      .flatMap((f) => f.chunks);
+    expect(totalChunks).toHaveLength(200);
+    // Should have far fewer than 200 flush calls
+    const stdoutFlushes = flushes.filter((f) => f.stream === 'stdout');
+    expect(stdoutFlushes.length).toBeLessThan(20);
   });
 });
