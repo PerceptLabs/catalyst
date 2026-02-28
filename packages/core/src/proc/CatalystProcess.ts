@@ -7,7 +7,7 @@
  * - Signal handling (SIGTERM for graceful, SIGKILL for immediate termination)
  * - Exit code tracking
  */
-import type { CatalystEngine } from '../engine/CatalystEngine.js';
+import type { IEngine } from '../engine/interfaces.js';
 
 export type Signal = 'SIGTERM' | 'SIGKILL' | 'SIGINT';
 export type ProcessState = 'starting' | 'running' | 'exited' | 'killed';
@@ -20,7 +20,7 @@ export class CatalystProcess {
   private _exitCode: number | null = null;
   private _stdoutChunks: string[] = [];
   private _stderrChunks: string[] = [];
-  private _engine: CatalystEngine | null = null;
+  private _engine: IEngine | null = null;
   private _handlers = new Map<string, ProcessEventHandler[]>();
   private _startTime: number;
 
@@ -50,7 +50,7 @@ export class CatalystProcess {
   }
 
   /** Attach the engine instance for this process */
-  _setEngine(engine: CatalystEngine): void {
+  _setEngine(engine: IEngine): void {
     this._engine = engine;
     this._state = 'running';
 
@@ -167,7 +167,7 @@ export class CatalystProcess {
   private _cleanup(): void {
     if (this._engine) {
       try {
-        this._engine.dispose();
+        this._engine.destroy().catch(() => {});
       } catch {
         // Ignore disposal errors
       }

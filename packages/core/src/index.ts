@@ -6,6 +6,18 @@ export const VERSION = '0.0.1';
 export { CatalystFS } from './fs/index.js';
 export { CatalystEngine } from './engine/index.js';
 export type { EngineConfig, ConsoleLevel } from './engine/index.js';
+export { NodeCompatLoader } from './engine/index.js';
+export type {
+  IEngine,
+  IModuleLoader,
+  EngineFactory,
+  ModuleLoaderFactory,
+  EngineInstanceConfig,
+  EngineCapabilities,
+  ModuleResolution,
+  ModuleLoaderCapabilities,
+  ModuleLoaderConfig,
+} from './engine/index.js';
 export { FetchProxy } from './net/index.js';
 export type { FetchProxyConfig, SerializedRequest, SerializedResponse } from './net/index.js';
 export { ProcessManager, CatalystProcess } from './proc/index.js';
@@ -34,6 +46,6 @@ export { ConflictResolver, } from './sync/index.js';
 export type { ConflictInfo, ConflictResolution, ConflictStrategy } from './sync/index.js';
 export { PROTOCOL_VERSION, generateOpId } from './sync/index.js';
 export type { FileOperation, SyncMessage, ConnectionState, SyncResult } from './sync/index.js';
-export { Catalyst } from './catalyst.js';
+export { Catalyst, createRuntime } from './catalyst.js';
 export type { CatalystConfig } from './catalyst.js';
 

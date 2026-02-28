@@ -19,6 +19,7 @@
  */
 import { CatalystEngine } from '../engine/CatalystEngine.js';
 import type { CatalystFS } from '../fs/CatalystFS.js';
+import type { EngineFactory } from '../engine/interfaces.js';
 import { CatalystWASI } from '../wasi/CatalystWASI.js';
 import { CatalystProcess, type Signal } from './CatalystProcess.js';
 import { WorkerPool } from './WorkerPool.js';
@@ -44,6 +45,8 @@ export interface ProcessManagerConfig {
   maxWorkers?: number; // default 8 — WorkerPool limit
   /** Force inline mode (skip Worker detection) */
   forceInline?: boolean;
+  /** Factory for creating engine instances — defaults to CatalystEngine.create() */
+  engineFactory?: EngineFactory;
 }
 
 export class ProcessManager {
@@ -54,12 +57,17 @@ export class ProcessManager {
   private maxProcesses: number;
   private pool: WorkerPool;
   private forceInline: boolean;
+  private engineFactory: EngineFactory;
 
   constructor(config: ProcessManagerConfig = {}) {
     this.fs = config.fs;
     this.maxProcesses = config.maxProcesses ?? 32;
     this.forceInline = config.forceInline ?? false;
     this.pool = new WorkerPool({ maxWorkers: config.maxWorkers ?? 8 });
+    this.engineFactory = config.engineFactory ?? ((cfg) => CatalystEngine.create({
+      fs: cfg.fs as CatalystFS | undefined,
+      env: cfg.env,
+    }));
   }
 
   /**
@@ -232,14 +240,14 @@ export class ProcessManager {
     options: ProcessOptions,
   ): Promise<void> {
     try {
-      const engine = await CatalystEngine.create({
+      const engine = await this.engineFactory({
         fs: this.fs,
         env: options.env,
       });
 
       // Check again after async engine creation
       if (proc.state === 'killed' || proc.state === 'exited') {
-        engine.dispose();
+        await engine.destroy();
         return;
       }
 

@@ -6,6 +6,7 @@
  */
 import { CatalystFS } from './fs/CatalystFS.js';
 import { CatalystEngine, type EngineConfig } from './engine/CatalystEngine.js';
+import type { IEngine, EngineFactory, ModuleLoaderFactory } from './engine/interfaces.js';
 import { FetchProxy, type FetchProxyConfig } from './net/FetchProxy.js';
 import { ProcessManager } from './proc/ProcessManager.js';
 import { PackageManager, type PackageManagerConfig } from './pkg/PackageManager.js';
@@ -26,6 +27,10 @@ export interface CatalystConfig {
     transpiler?: Transpiler;
     config?: BuildConfig;
   };
+  /** Custom engine factory — allows swapping QuickJS for another engine */
+  engineFactory?: EngineFactory;
+  /** Custom module loader factory — allows swapping NodeCompatLoader */
+  moduleLoaderFactory?: ModuleLoaderFactory;
 }
 
 export class Catalyst {
@@ -36,8 +41,10 @@ export class Catalyst {
   readonly hmr: HMRManager;
   readonly fetchProxy?: FetchProxy;
 
-  private _engine: CatalystEngine | null = null;
+  private _engine: IEngine | null = null;
   private engineConfig: Omit<EngineConfig, 'fs' | 'fetchProxy'>;
+  private _engineFactory?: EngineFactory;
+  private _moduleLoaderFactory?: ModuleLoaderFactory;
 
   private constructor(
     fs: CatalystFS,
@@ -47,6 +54,8 @@ export class Catalyst {
     packages: PackageManager,
     buildPipeline: BuildPipeline,
     hmr: HMRManager,
+    engineFactory?: EngineFactory,
+    moduleLoaderFactory?: ModuleLoaderFactory,
   ) {
     this.fs = fs;
     this.engineConfig = engineConfig;
@@ -55,6 +64,8 @@ export class Catalyst {
     this.packages = packages;
     this.buildPipeline = buildPipeline;
     this.hmr = hmr;
+    this._engineFactory = engineFactory;
+    this._moduleLoaderFactory = moduleLoaderFactory;
   }
 
   /**
@@ -65,7 +76,10 @@ export class Catalyst {
 
     const fetchProxy = config.fetch ? new FetchProxy(config.fetch) : undefined;
 
-    const processes = new ProcessManager({ fs });
+    const processes = new ProcessManager({
+      fs,
+      engineFactory: config.engineFactory,
+    });
 
     const packages = new PackageManager({
       fs,
@@ -84,19 +98,33 @@ export class Catalyst {
       packages,
       buildPipeline,
       hmr,
+      config.engineFactory,
+      config.moduleLoaderFactory,
     );
   }
 
   /**
-   * Get or create the CatalystEngine (lazy-initialized).
+   * Get or create the engine (lazy-initialized).
+   * Uses the custom engineFactory if provided, otherwise defaults to CatalystEngine.
    */
-  async getEngine(): Promise<CatalystEngine> {
+  async getEngine(): Promise<IEngine> {
     if (!this._engine) {
-      this._engine = await CatalystEngine.create({
-        fs: this.fs,
-        fetchProxy: this.fetchProxy,
-        ...this.engineConfig,
-      });
+      if (this._engineFactory) {
+        this._engine = await this._engineFactory({
+          fs: this.fs,
+          net: this.fetchProxy,
+          env: this.engineConfig.env,
+          moduleLoader: this._moduleLoaderFactory
+            ? this._moduleLoaderFactory({ fs: this.fs, env: this.engineConfig.env })
+            : undefined,
+        });
+      } else {
+        this._engine = await CatalystEngine.create({
+          fs: this.fs,
+          fetchProxy: this.fetchProxy,
+          ...this.engineConfig,
+        });
+      }
     }
     return this._engine;
   }
@@ -111,10 +139,14 @@ export class Catalyst {
 
   /**
    * Evaluate async JavaScript code (supports await, fetch, etc.).
+   * Requires a CatalystEngine (not available with custom engine factories).
    */
   async evalAsync(code: string, filename?: string): Promise<any> {
     const engine = await this.getEngine();
-    return engine.evalAsync(code, filename);
+    if (typeof (engine as any).evalAsync !== 'function') {
+      throw new Error('evalAsync requires CatalystEngine (not available with custom engine factory)');
+    }
+    return (engine as any).evalAsync(code, filename);
   }
 
   /**
@@ -123,8 +155,19 @@ export class Catalyst {
   dispose(): void {
     this.hmr.stop();
     this.processes.killAll();
-    this._engine?.dispose();
+    this._engine?.destroy().catch(() => {});
     this._engine = null;
     this.fs.destroy();
   }
+}
+
+/**
+ * createRuntime — Convenience factory for creating a Catalyst instance
+ * with custom engine and module loader factories.
+ *
+ * This is the primary entry point for distribution packages that want
+ * to wire a specific engine + loader combination.
+ */
+export async function createRuntime(config: CatalystConfig = {}): Promise<Catalyst> {
+  return Catalyst.create(config);
 }

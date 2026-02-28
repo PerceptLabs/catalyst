@@ -1,11 +1,13 @@
 /**
  * CatalystEngine — QuickJS-WASM JS execution engine
  *
+ * Implements IEngine for the QuickJS runtime.
  * Runs user code inside QuickJS compiled to WebAssembly.
  * JSPI/Asyncify variant auto-detection.
- * Host bindings for fs, path, process, console, buffer, timers, events, etc.
+ * Host bindings for fs, console, fetch.
  *
  * Architecture:
+ * - Module loading delegated to IModuleLoader (NodeCompatLoader by default)
  * - Built-in modules are pre-eval'd at init time and stored in globalThis.__catalyst_modules
  * - require() is a pure JS function inside QuickJS that reads from the module cache
  * - Filesystem module loading uses a host bridge that returns source strings (not handles)
@@ -13,7 +15,8 @@
  */
 import type { CatalystFS } from '../fs/CatalystFS.js';
 import type { FetchProxy } from '../net/FetchProxy.js';
-import { UNENV_MODULES, STUB_MODULES, getStubModuleSource } from './host-bindings/unenv-bridge.js';
+import type { IEngine, IModuleLoader, EngineInstanceConfig } from './interfaces.js';
+import { NodeCompatLoader } from './NodeCompatLoader.js';
 
 export interface EngineConfig {
   fs?: CatalystFS;
@@ -21,13 +24,15 @@ export interface EngineConfig {
   memoryLimit?: number; // MB, default 256
   timeout?: number; // ms, default 30000
   env?: Record<string, string>;
+  /** Module loader — defaults to NodeCompatLoader if not provided */
+  moduleLoader?: IModuleLoader;
 }
 
 export type ConsoleLevel = 'log' | 'error' | 'warn' | 'info' | 'debug';
 
 type EventHandler = (...args: any[]) => void;
 
-export class CatalystEngine {
+export class CatalystEngine implements IEngine {
   private context: any;
   private runtime: any;
   private module: any;
@@ -38,10 +43,12 @@ export class CatalystEngine {
   private _fsBindingsInjected = false;
   private handlers = new Map<string, EventHandler[]>();
   private consoleLogs: Array<{ level: ConsoleLevel; args: any[] }> = [];
-  private _builtinSources: Record<string, () => Promise<string>> = {};
-  private _builtinSourceCode: Record<string, string> = {};
+  private moduleLoader: IModuleLoader;
 
-  private constructor() {}
+  private constructor() {
+    // Placeholder — initialized in create()
+    this.moduleLoader = null!;
+  }
 
   /**
    * Create a new CatalystEngine instance.
@@ -51,6 +58,12 @@ export class CatalystEngine {
     const engine = new CatalystEngine();
     engine.fs = config.fs;
     engine.fetchProxy = config.fetchProxy;
+
+    // Create module loader if not provided
+    engine.moduleLoader = config.moduleLoader ?? new NodeCompatLoader({
+      fs: config.fs,
+      env: config.env,
+    });
 
     const { getQuickJS } = await import('quickjs-emscripten');
     engine.module = await getQuickJS();
@@ -66,7 +79,7 @@ export class CatalystEngine {
 
     // Inject host bindings
     engine.injectConsole();
-    engine.injectBuiltinModules(config.env);
+    engine.injectRequireSystem();
 
     // Inject fetch binding if proxy provided
     if (engine.fetchProxy) {
@@ -75,6 +88,33 @@ export class CatalystEngine {
     }
 
     return engine;
+  }
+
+  // ---- IEngine: createInstance ----
+
+  /**
+   * Create a new isolated CatalystEngine instance.
+   * Used by ProcessManager for child processes.
+   */
+  async createInstance(config: EngineInstanceConfig): Promise<IEngine> {
+    return CatalystEngine.create({
+      fs: config.fs as CatalystFS | undefined,
+      fetchProxy: config.net as FetchProxy | undefined,
+      moduleLoader: config.moduleLoader,
+      memoryLimit: config.memoryLimit,
+      timeout: config.timeout,
+      env: config.env,
+    });
+  }
+
+  // ---- IEngine: destroy ----
+
+  /**
+   * Async destroy — IEngine contract.
+   * Delegates to synchronous dispose().
+   */
+  async destroy(): Promise<void> {
+    this.dispose();
   }
 
   /** Inject console.log/error/warn/info/debug that forward to host */
@@ -107,48 +147,23 @@ export class CatalystEngine {
 
   /**
    * Set up the require() system.
-   * - Registers builtin source loaders for async loading in loadBuiltins()
    * - Installs require() as a pure JS function inside QuickJS
-   * - Installs a host bridge for reading module sources from the filesystem
+   * - Installs a host bridge for reading module sources via the module loader
    */
-  private injectBuiltinModules(env?: Record<string, string>): void {
+  private injectRequireSystem(): void {
     const ctx = this.context;
     const engine = this;
-
-    // Built-in module source loaders (async — resolved in loadBuiltins())
-    // Resolution order: custom host bindings → unenv-backed → stubs
-    this._builtinSources = {
-      // 1. Custom catalyst host bindings
-      path: async () => (await import('./host-bindings/path.js')).getPathSource(),
-      events: async () => (await import('./host-bindings/events.js')).getEventsSource(),
-      buffer: async () => (await import('./host-bindings/buffer.js')).getBufferSource(),
-      process: async () => (await import('./host-bindings/process.js')).getProcessSource(env),
-      assert: async () => (await import('./host-bindings/assert.js')).getAssertSource(),
-      util: async () => (await import('./host-bindings/util.js')).getUtilSource(),
-      url: async () => (await import('./host-bindings/url.js')).getUrlSource(),
-      timers: async () => (await import('./host-bindings/timers.js')).getTimersSource(),
-    };
-
-    // 2. unenv-backed modules (crypto, os, stream, http, querystring, string_decoder, zlib)
-    for (const [name, getSource] of Object.entries(UNENV_MODULES)) {
-      this._builtinSources[name] = async () => getSource();
-    }
-
-    // 3. Stub modules (net, tls, dns, etc. — clear error messages)
-    for (const name of STUB_MODULES) {
-      this._builtinSources[name] = async () => getStubModuleSource(name);
-    }
 
     // Initialize the module registry inside QuickJS
     const initResult = ctx.evalCode(`globalThis.__catalyst_modules = {};`);
     if (initResult.value) initResult.value.dispose();
     if (initResult.error) initResult.error.dispose();
 
-    // Host function: reads module source from CatalystFS by name/path.
+    // Host function: reads module source via the module loader.
     // Returns source string on success, or undefined if not found.
     const requireSourceFn = ctx.newFunction('__catalyst_require_source', (nameHandle: any) => {
       const moduleName = ctx.getString(nameHandle);
-      const source = engine.resolveAndReadModule(moduleName);
+      const source = engine.moduleLoader.resolveModule(moduleName);
       if (source !== null) {
         return ctx.newString(source);
       }
@@ -201,19 +216,15 @@ globalThis.require = function require(name) {
   /**
    * Load all built-in module sources and pre-eval them into the context.
    * Called lazily on first eval().
-   * Stores results in globalThis.__catalyst_modules inside QuickJS.
+   * Delegates to the module loader for source code.
    */
   async loadBuiltins(): Promise<void> {
     if (this._builtinsLoaded) return;
 
     const ctx = this.context;
 
-    // Load all source strings (async)
-    for (const [name, getSource] of Object.entries(this._builtinSources)) {
-      if (!this._builtinSourceCode[name]) {
-        this._builtinSourceCode[name] = await getSource();
-      }
-    }
+    // Initialize the module loader (loads builtin source strings)
+    await this.moduleLoader.initialize();
 
     // Inject fs host functions BEFORE pre-eval (so fs module can bind them)
     if (this.fs && !this._fsBindingsInjected) {
@@ -221,44 +232,23 @@ globalThis.require = function require(name) {
       this._fsBindingsInjected = true;
     }
 
-    // Register the fs binding source
-    if (this.fs) {
-      this._builtinSourceCode['fs'] = this.getFsBindingSource();
-    }
-
-    // Pre-eval all built-in modules and store in globalThis.__catalyst_modules.
-    // Each source uses `module.exports = ...` so we wrap it with a module context.
-    // The result is stored directly as a QuickJS value (no host handle caching).
-    for (const [name, source] of Object.entries(this._builtinSourceCode)) {
-      const wrapped = `globalThis.__catalyst_modules["${name}"] = (function() { var module = { exports: {} }; var exports = module.exports;\n${source}\n; return module.exports; })();`;
-      const result = ctx.evalCode(wrapped, `<builtin:${name}>`);
-      if (result.error) {
-        const err = ctx.dump(result.error);
-        result.error.dispose();
-        console.error(`[CatalystEngine] Failed to pre-eval builtin '${name}':`, JSON.stringify(err));
-      } else if (result.value) {
-        result.value.dispose(); // We don't need the return value; it's stored in the global
+    // Pre-eval all built-in modules from the loader into __catalyst_modules.
+    for (const name of this.moduleLoader.availableBuiltins()) {
+      const source = this.moduleLoader.getBuiltinSource(name);
+      if (source) {
+        const wrapped = `globalThis.__catalyst_modules["${name}"] = (function() { var module = { exports: {} }; var exports = module.exports;\n${source}\n; return module.exports; })();`;
+        const result = ctx.evalCode(wrapped, `<builtin:${name}>`);
+        if (result.error) {
+          const err = ctx.dump(result.error);
+          result.error.dispose();
+          console.error(`[CatalystEngine] Failed to pre-eval builtin '${name}':`, JSON.stringify(err));
+        } else if (result.value) {
+          result.value.dispose();
+        }
       }
     }
 
     this._builtinsLoaded = true;
-  }
-
-  /** Get fs binding source that delegates to CatalystFS host functions */
-  private getFsBindingSource(): string {
-    return `
-  module.exports.readFileSync = globalThis.__catalyst_fs_readFileSync;
-  module.exports.writeFileSync = globalThis.__catalyst_fs_writeFileSync;
-  module.exports.existsSync = globalThis.__catalyst_fs_existsSync;
-  module.exports.mkdirSync = globalThis.__catalyst_fs_mkdirSync;
-  module.exports.readdirSync = globalThis.__catalyst_fs_readdirSync;
-  module.exports.statSync = globalThis.__catalyst_fs_statSync;
-  module.exports.unlinkSync = globalThis.__catalyst_fs_unlinkSync;
-  module.exports.renameSync = globalThis.__catalyst_fs_renameSync;
-  module.exports.copyFileSync = globalThis.__catalyst_fs_copyFileSync;
-  module.exports.appendFileSync = globalThis.__catalyst_fs_appendFileSync;
-  module.exports.rmdirSync = globalThis.__catalyst_fs_rmdirSync;
-`;
   }
 
   /** Inject fs host functions into the QuickJS context */
@@ -328,65 +318,6 @@ globalThis.require = function require(name) {
       const options = opts ? JSON.parse(opts) : undefined;
       fs.rmdirSync(path, options);
     });
-  }
-
-  /**
-   * Resolve and read a module's source code from CatalystFS.
-   * Used by the __catalyst_require_source host function.
-   * Returns source string or null if not found.
-   */
-  private resolveAndReadModule(moduleName: string): string | null {
-    if (!this.fs) return null;
-
-    // Relative or absolute path
-    if (moduleName.startsWith('./') || moduleName.startsWith('../') || moduleName.startsWith('/')) {
-      const resolved = this.resolveModulePath(moduleName);
-      try {
-        return this.fs.readFileSync(resolved, 'utf-8') as string;
-      } catch {
-        return null;
-      }
-    }
-
-    // Node modules: try /node_modules/{name}
-    const nmPath = `/node_modules/${moduleName}`;
-
-    // Try package.json main
-    try {
-      const pkgJson = this.fs.readFileSync(`${nmPath}/package.json`, 'utf-8') as string;
-      const pkg = JSON.parse(pkgJson);
-      const main = pkg.main || 'index.js';
-      return this.fs.readFileSync(`${nmPath}/${main}`, 'utf-8') as string;
-    } catch {
-      // no package.json
-    }
-
-    // Try index.js
-    try {
-      return this.fs.readFileSync(`${nmPath}/index.js`, 'utf-8') as string;
-    } catch {
-      // not found
-    }
-
-    return null;
-  }
-
-  /** Resolve a relative module path, adding .js extension if needed */
-  private resolveModulePath(moduleName: string): string {
-    if (!moduleName.endsWith('.js') && !moduleName.endsWith('.json') && !moduleName.endsWith('.ts')) {
-      if (this.fs?.existsSync(moduleName + '.js')) return moduleName + '.js';
-      if (this.fs?.existsSync(moduleName + '/index.js')) return moduleName + '/index.js';
-      if (this.fs?.existsSync(moduleName)) return moduleName;
-      return moduleName + '.js'; // default
-    }
-    return moduleName;
-  }
-
-  /** Simple dirname */
-  private dirname(path: string): string {
-    const idx = path.lastIndexOf('/');
-    if (idx <= 0) return '/';
-    return path.substring(0, idx);
   }
 
   /**
