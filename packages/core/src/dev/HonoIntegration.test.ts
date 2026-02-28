@@ -1,7 +1,7 @@
 /**
  * HonoIntegration — Node.js unit tests
  *
- * Tests API route detection, building, and IIFE wrapping.
+ * Phase 13b: Tests real Hono integration — routing, middleware, error boundaries.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { CatalystFS } from '../fs/CatalystFS.js';
@@ -24,14 +24,14 @@ describe('HonoIntegration — Detection', () => {
 
   it('should detect API routes with index.ts', () => {
     fs.mkdirSync('/src/api', { recursive: true });
-    fs.writeFileSync('/src/api/index.ts', 'app.get("/api/hello", (c) => c.json({ msg: "hi" }));');
+    fs.writeFileSync('/src/api/index.ts', 'var { Hono } = require("hono"); var app = new Hono();');
     const hono = new HonoIntegration(fs, pipeline);
     expect(hono.hasApiRoutes()).toBe(true);
   });
 
   it('should detect API routes with index.js', () => {
     fs.mkdirSync('/src/api', { recursive: true });
-    fs.writeFileSync('/src/api/index.js', 'app.get("/api/hello", (c) => c.json({ msg: "hi" }));');
+    fs.writeFileSync('/src/api/index.js', 'var { Hono } = require("hono"); var app = new Hono();');
     const hono = new HonoIntegration(fs, pipeline);
     expect(hono.hasApiRoutes()).toBe(true);
   });
@@ -85,7 +85,9 @@ describe('HonoIntegration — Building', () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.get('/api/hello', function(c) { return c.json({ message: 'Hello!' }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/hello', function(c) { return c.json({ message: 'Hello!' }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
@@ -104,7 +106,12 @@ describe('HonoIntegration — Building', () => {
 
   it('should support custom output path', async () => {
     fs.mkdirSync('/src/api', { recursive: true });
-    fs.writeFileSync('/src/api/index.ts', 'app.get("/api/test", function(c) { return c.text("ok"); });');
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/test', function(c) { return c.text('ok'); });`,
+    );
 
     const hono = new HonoIntegration(fs, pipeline, {
       outputPath: '/build/api.js',
@@ -115,18 +122,21 @@ describe('HonoIntegration — Building', () => {
     expect(fs.existsSync('/build/api.js')).toBe(true);
   });
 
-  it('should include IIFE wrapper with router', async () => {
+  it('should include IIFE wrapper with real Hono', async () => {
     fs.mkdirSync('/src/api', { recursive: true });
-    fs.writeFileSync('/src/api/index.ts', '// API routes');
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();`,
+    );
 
     const hono = new HonoIntegration(fs, pipeline);
     const result = await hono.build();
 
     const content = fs.readFileSync(result.outputPath!, 'utf-8') as string;
     expect(content).toContain('(function()');
-    expect(content).toContain('var routes = []');
-    expect(content).toContain('matchRoute');
-    expect(content).toContain('createContext');
+    expect(content).toContain('__honoModules');
+    expect(content).toContain('catalystApiHandler');
   });
 
   it('should collect API files', () => {
@@ -142,7 +152,7 @@ describe('HonoIntegration — Building', () => {
   });
 });
 
-describe('HonoIntegration — Built API Handler', () => {
+describe('HonoIntegration — Real Hono Handler', () => {
   let fs: CatalystFS;
   let pipeline: BuildPipeline;
 
@@ -151,28 +161,25 @@ describe('HonoIntegration — Built API Handler', () => {
     pipeline = new BuildPipeline(fs, new PassthroughTranspiler());
   });
 
-  it('should produce executable IIFE that defines catalystApiHandler', async () => {
+  it('should produce executable IIFE with real Hono routing', async () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.get('/api/hello', function(c) { return c.json({ message: 'Hello World' }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/hello', function(c) { return c.json({ message: 'Hello World' }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
     await hono.build();
 
     const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
-
-    // Execute the IIFE in our context
     const self: any = {};
     new Function('self', code)(self);
 
     expect(typeof self.catalystApiHandler).toBe('function');
 
-    // Test the handler
-    const request = new Request('http://localhost/api/hello', {
-      method: 'GET',
-    });
+    const request = new Request('http://localhost/api/hello', { method: 'GET' });
     const response = await self.catalystApiHandler(request);
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -183,7 +190,9 @@ describe('HonoIntegration — Built API Handler', () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.post('/api/data', function(c) { return c.json({ received: true }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.post('/api/data', function(c) { return c.json({ received: true }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
@@ -205,7 +214,9 @@ describe('HonoIntegration — Built API Handler', () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.get('/api/hello', function(c) { return c.json({ ok: true }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/hello', function(c) { return c.json({ ok: true }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
@@ -225,7 +236,9 @@ describe('HonoIntegration — Built API Handler', () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.get('/api/users/:id', function(c) { return c.json({ id: c.req.param('id') }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/users/:id', function(c) { return c.json({ id: c.req.param('id') }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
@@ -247,7 +260,9 @@ describe('HonoIntegration — Built API Handler', () => {
     fs.mkdirSync('/src/api', { recursive: true });
     fs.writeFileSync(
       '/src/api/index.ts',
-      `app.get('/api/search', function(c) { return c.json({ q: c.req.query('q') }); });`,
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/search', function(c) { return c.json({ q: c.req.query('q') }); });`,
     );
 
     const hono = new HonoIntegration(fs, pipeline);
@@ -263,5 +278,253 @@ describe('HonoIntegration — Built API Handler', () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.q).toBe('test');
+  });
+
+  it('should support ESM import syntax (transformed to require)', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `import { Hono } from 'hono';
+const app = new Hono();
+app.get('/api/esm', (c) => c.json({ esm: true }));`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/esm', { method: 'GET' }),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.esm).toBe(true);
+  });
+
+  it('should support cors middleware', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var { cors } = require('hono/cors');
+var app = new Hono();
+app.use('*', cors());
+app.get('/api/data', function(c) { return c.json({ data: 1 }); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/data', { method: 'GET' }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+  });
+
+  it('should support middleware chaining with real next()', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.use('/api/*', async function(c, next) {
+  c.header('X-Custom', 'middleware-ran');
+  await next();
+});
+app.get('/api/chain', function(c) { return c.json({ chained: true }); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/chain', { method: 'GET' }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('X-Custom')).toBe('middleware-ran');
+    const body = await response.json();
+    expect(body.chained).toBe(true);
+  });
+
+  it('should support basePath', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono().basePath('/api');
+app.get('/hello', function(c) { return c.json({ basePath: true }); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/hello', { method: 'GET' }),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.basePath).toBe(true);
+  });
+
+  it('should handle error boundary (500 on thrown error)', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.onError(function(err, c) {
+  return c.json({ error: err.message }, 500);
+});
+app.get('/api/fail', function(c) { throw new Error('test error'); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/fail', { method: 'GET' }),
+    );
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body.error).toBe('test error');
+  });
+
+  it('should support c.set() / c.get() for request-scoped state', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.use('/api/*', async function(c, next) {
+  c.set('user', 'alice');
+  await next();
+});
+app.get('/api/user', function(c) { return c.json({ user: c.get('user') }); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const response = await self.catalystApiHandler(
+      new Request('http://localhost/api/user', { method: 'GET' }),
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.user).toBe('alice');
+  });
+
+  it('should support wildcard routes', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.all('/api/*', function(c) { return c.json({ wildcard: true, path: c.req.path }); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const r1 = await self.catalystApiHandler(
+      new Request('http://localhost/api/anything', { method: 'GET' }),
+    );
+    expect(r1.status).toBe(200);
+    const b1 = await r1.json();
+    expect(b1.wildcard).toBe(true);
+
+    const r2 = await self.catalystApiHandler(
+      new Request('http://localhost/api/deep/nested/path', { method: 'POST' }),
+    );
+    expect(r2.status).toBe(200);
+  });
+
+  it('should handle multiple routes', async () => {
+    fs.mkdirSync('/src/api', { recursive: true });
+    fs.writeFileSync(
+      '/src/api/index.ts',
+      `var { Hono } = require('hono');
+var app = new Hono();
+app.get('/api/users', function(c) { return c.json({ users: [] }); });
+app.post('/api/users', function(c) { return c.json({ created: true }, 201); });
+app.get('/api/health', function(c) { return c.text('ok'); });`,
+    );
+
+    const hono = new HonoIntegration(fs, pipeline);
+    await hono.build();
+    const code = fs.readFileSync('/dist/api-sw.js', 'utf-8') as string;
+
+    const self: any = {};
+    new Function('self', code)(self);
+
+    const r1 = await self.catalystApiHandler(
+      new Request('http://localhost/api/users'),
+    );
+    expect((await r1.json()).users).toEqual([]);
+
+    const r2 = await self.catalystApiHandler(
+      new Request('http://localhost/api/users', { method: 'POST' }),
+    );
+    expect(r2.status).toBe(201);
+
+    const r3 = await self.catalystApiHandler(
+      new Request('http://localhost/api/health'),
+    );
+    expect(await r3.text()).toBe('ok');
+  });
+});
+
+describe('HonoIntegration — ensureHono', () => {
+  it('should write Hono to CatalystFS /node_modules/hono/', async () => {
+    const fs = await CatalystFS.create('hono-ensure');
+    const pipeline = new BuildPipeline(fs, new PassthroughTranspiler());
+
+    const hono = new HonoIntegration(fs, pipeline);
+    hono.ensureHono();
+
+    expect(fs.existsSync('/node_modules/hono/package.json')).toBe(true);
+    expect(fs.existsSync('/node_modules/hono/dist/cjs/index.js')).toBe(true);
+    expect(fs.existsSync('/node_modules/hono/dist/cjs/middleware/cors/index.js')).toBe(true);
+
+    const pkg = JSON.parse(fs.readFileSync('/node_modules/hono/package.json', 'utf-8') as string);
+    expect(pkg.name).toBe('hono');
+    expect(pkg.version).toBe('4.12.3');
+  });
+
+  it('should be idempotent', async () => {
+    const fs = await CatalystFS.create('hono-ensure-idem');
+    const pipeline = new BuildPipeline(fs, new PassthroughTranspiler());
+
+    const hono = new HonoIntegration(fs, pipeline);
+    hono.ensureHono();
+    hono.ensureHono(); // Should not throw
+    expect(fs.existsSync('/node_modules/hono/dist/cjs/index.js')).toBe(true);
   });
 });

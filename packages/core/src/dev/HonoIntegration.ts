@@ -1,14 +1,16 @@
 /**
- * HonoIntegration — Backend API routes via Hono in Service Worker
+ * HonoIntegration — Backend API routes via real Hono in Service Worker
  *
  * Detects if /src/api/ directory exists, builds it to /dist/api-sw.js (IIFE format),
  * and enables API route handling in the preview Service Worker.
  *
- * In browser-only mode, Hono runs in the SW.
- * With Deno server, the same code runs on real Deno.
+ * Phase 13b: Replaced the toy ~125-line mini-router with pre-bundled real Hono.
+ * All Hono middleware, routing, error boundaries, and the full Context API
+ * now work in the Service Worker.
  */
 import type { CatalystFS } from '../fs/CatalystFS.js';
 import type { BuildPipeline, Transpiler } from './BuildPipeline.js';
+import { HONO_CORE_BUNDLE, HONO_CORS_BUNDLE, HONO_PACKAGE_JSON } from './hono-bundle.js';
 
 export interface HonoIntegrationConfig {
   /** Source directory for API routes (default: /src/api) */
@@ -73,6 +75,7 @@ export class HonoIntegration {
 
   /**
    * Build API routes to IIFE format for Service Worker.
+   * Uses pre-bundled real Hono — full middleware, routing, and Context API.
    */
   async build(): Promise<HonoBuildResult> {
     if (!this.hasApiRoutes()) {
@@ -94,9 +97,8 @@ export class HonoIntegration {
       // Read the API source
       const source = this.fs.readFileSync(entryPath, 'utf-8') as string;
 
-      // Wrap the API code in IIFE format for SW injection
-      // The wrapper exposes a global `handleApiRequest` function
-      const wrapped = this.wrapForServiceWorker(source, entryPath);
+      // Create the IIFE wrapper with real Hono
+      const wrapped = this.createHonoWrapper(source, entryPath);
 
       // Ensure output directory exists
       const outputDir = this.outputPath.substring(
@@ -152,134 +154,113 @@ export class HonoIntegration {
   }
 
   /**
-   * Wrap API code in IIFE format for Service Worker injection.
-   * Exposes a global `catalystApiHandler` function.
+   * Ensure Hono package is available in CatalystFS /node_modules/hono/.
+   * Pre-bundled with Catalyst — no network needed.
    */
-  private wrapForServiceWorker(source: string, _filePath: string): string {
-    return `// Catalyst API Bundle — Auto-generated
-// Source: ${_filePath}
+  ensureHono(): void {
+    const honoIndex = '/node_modules/hono/dist/cjs/index.js';
+    if (this.fs.existsSync(honoIndex)) return;
+
+    this.fs.mkdirSync('/node_modules/hono/dist/cjs/middleware/cors', { recursive: true });
+    this.fs.writeFileSync('/node_modules/hono/package.json', HONO_PACKAGE_JSON);
+    this.fs.writeFileSync(honoIndex, HONO_CORE_BUNDLE);
+    this.fs.writeFileSync(
+      '/node_modules/hono/dist/cjs/middleware/cors/index.js',
+      HONO_CORS_BUNDLE,
+    );
+  }
+
+  /**
+   * Create IIFE wrapper with real Hono.
+   *
+   * The wrapper:
+   * 1. Defines a CommonJS module registry with pre-bundled Hono
+   * 2. Provides require() that resolves 'hono' and 'hono/cors'
+   * 3. Transforms user's ESM import statements to require() calls
+   * 4. Executes user code
+   * 5. Wires up self.catalystApiHandler = app.fetch.bind(app)
+   */
+  private createHonoWrapper(source: string, filePath: string): string {
+    // Transform ESM imports to CommonJS require calls
+    const transformed = this.transformImports(source);
+
+    return `// Catalyst API Bundle — Real Hono v4.12.3
+// Source: ${filePath}
 (function() {
   'use strict';
 
-  // Simple Hono-compatible router for Service Worker
-  var routes = [];
-  var middleware = [];
+  // --- Pre-bundled Hono module registry ---
+  var __honoModules = {};
 
-  var app = {
-    get: function(path, handler) { routes.push({ method: 'GET', path: path, handler: handler }); },
-    post: function(path, handler) { routes.push({ method: 'POST', path: path, handler: handler }); },
-    put: function(path, handler) { routes.push({ method: 'PUT', path: path, handler: handler }); },
-    delete: function(path, handler) { routes.push({ method: 'DELETE', path: path, handler: handler }); },
-    patch: function(path, handler) { routes.push({ method: 'PATCH', path: path, handler: handler }); },
-    all: function(path, handler) { routes.push({ method: '*', path: path, handler: handler }); },
-    use: function(handler) { middleware.push(handler); },
-  };
+  // Hono core
+  (function() {
+    var module = { exports: {} };
+    var exports = module.exports;
+    ${HONO_CORE_BUNDLE}
+    __honoModules['hono'] = module.exports;
+  })();
 
-  // Context helper
-  function createContext(request, params) {
-    return {
-      req: {
-        method: request.method,
-        url: request.url,
-        path: new URL(request.url).pathname,
-        param: function(name) { return params[name]; },
-        query: function(name) { return new URL(request.url).searchParams.get(name); },
-        header: function(name) { return request.headers.get(name); },
-        json: function() { return request.json(); },
-        text: function() { return request.text(); },
-      },
-      json: function(data, status) {
-        return new Response(JSON.stringify(data), {
-          status: status || 200,
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-        });
-      },
-      text: function(data, status) {
-        return new Response(data, {
-          status: status || 200,
-          headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' },
-        });
-      },
-      html: function(data, status) {
-        return new Response(data, {
-          status: status || 200,
-          headers: { 'Content-Type': 'text/html', 'Access-Control-Allow-Origin': '*' },
-        });
-      },
-      status: function(code) {
-        return {
-          json: function(data) {
-            return new Response(JSON.stringify(data), {
-              status: code,
-              headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
-            });
-          },
-          text: function(data) {
-            return new Response(data, { status: code, headers: { 'Access-Control-Allow-Origin': '*' } });
-          },
-        };
-      },
-      env: typeof self !== 'undefined' ? self.__catalystEnv || {} : {},
-    };
-  }
+  // Hono CORS middleware
+  (function() {
+    var module = { exports: {} };
+    var exports = module.exports;
+    ${HONO_CORS_BUNDLE}
+    __honoModules['hono/cors'] = module.exports;
+  })();
 
-  // Match a route pattern to a path
-  function matchRoute(pattern, path) {
-    if (pattern === path) return {};
-    var patternParts = pattern.split('/');
-    var pathParts = path.split('/');
-    if (patternParts.length !== pathParts.length) return null;
-    var params = {};
-    for (var i = 0; i < patternParts.length; i++) {
-      if (patternParts[i].startsWith(':')) {
-        params[patternParts[i].substring(1)] = pathParts[i];
-      } else if (patternParts[i] !== pathParts[i]) {
-        return null;
-      }
-    }
-    return params;
+  // --- CommonJS require shim ---
+  function require(name) {
+    if (__honoModules[name]) return __honoModules[name];
+    throw new Error('[catalyst] Module not found: ' + name);
   }
 
   // --- User API code ---
-${source}
+${transformed}
   // --- End user API code ---
 
-  // Global handler for the Service Worker
-  self.catalystApiHandler = async function(request) {
-    var url = new URL(request.url);
-    var pathname = url.pathname;
-
-    // Run middleware
-    for (var i = 0; i < middleware.length; i++) {
-      try {
-        var mwResult = await middleware[i](createContext(request, {}), function() {});
-        if (mwResult instanceof Response) return mwResult;
-      } catch (e) {}
-    }
-
-    // Match routes
-    for (var j = 0; j < routes.length; j++) {
-      var route = routes[j];
-      if (route.method !== '*' && route.method !== request.method) continue;
-      var params = matchRoute(route.path, pathname);
-      if (params !== null) {
-        try {
-          return await route.handler(createContext(request, params));
-        } catch (e) {
-          return new Response(JSON.stringify({ error: e.message || 'Internal Error' }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-          });
-        }
-      }
-    }
-
-    return new Response(JSON.stringify({ error: 'Not Found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  };
+  // --- Wire up handler ---
+  if (typeof app !== 'undefined' && typeof app.fetch === 'function') {
+    self.catalystApiHandler = function(request, env) {
+      return app.fetch(request, env);
+    };
+  } else {
+    console.error('[catalyst] No Hono app found. Export your app as "app".');
+  }
 })();
 `;
+  }
+
+  /**
+   * Transform ESM import statements to CommonJS require() calls.
+   * Handles:
+   *   import { X, Y } from 'mod'  → var { X, Y } = require('mod');
+   *   import X from 'mod'         → var X = require('mod').default || require('mod');
+   *   import * as X from 'mod'    → var X = require('mod');
+   *   export default X            → (kept, app is in scope via var)
+   */
+  private transformImports(source: string): string {
+    return source
+      // Named imports: import { X, Y } from 'mod'
+      .replace(
+        /import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+        (_match, names: string, mod: string) =>
+          `var {${names}} = require('${mod}');`,
+      )
+      // Default import: import X from 'mod'
+      .replace(
+        /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+        (_match, name: string, mod: string) =>
+          `var ${name} = (require('${mod}').default || require('${mod}'));`,
+      )
+      // Namespace import: import * as X from 'mod'
+      .replace(
+        /import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+        (_match, name: string, mod: string) =>
+          `var ${name} = require('${mod}');`,
+      )
+      // Strip export default (the var is still in scope)
+      .replace(/export\s+default\s+/g, '')
+      // Strip export { ... }
+      .replace(/export\s+\{[^}]*\}\s*;?/g, '');
   }
 }
