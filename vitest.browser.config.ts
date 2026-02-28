@@ -23,6 +23,7 @@ export default defineConfig({
       '@jitl/quickjs-wasmfile-release-asyncify',
       '@jitl/quickjs-wasmfile-debug-sync',
       '@jitl/quickjs-wasmfile-debug-asyncify',
+      'wa-sqlite',
     ],
   },
   assetsInclude: ['**/*.wasm'],
