@@ -52,6 +52,46 @@ export {
   ConflictResolver,
   PROTOCOL_VERSION,
   generateOpId,
+  // Engines — tiered architecture
+  QuickJSEngine,
+  NativeEngine,
+  NativeModuleLoader,
+  TieredEngine,
+  // Validation
+  CodeValidator,
+  checkCode,
+  validateImports,
+  runInSandbox,
+  // HTTP server
+  CatalystHTTPServer,
+  createHTTPServer,
+  getHTTPModuleSource,
+  // DNS
+  CatalystDNS,
+  getDNSModuleSource,
+  // TCP / TLS
+  CatalystTCPSocket,
+  CatalystTCPServer,
+  createConnection,
+  getNetModuleSource,
+  tlsConnect,
+  createTLSServer,
+  getTLSModuleSource,
+  // Process pipelines & cluster
+  pipeProcesses,
+  pipeToFile,
+  pipeFromFile,
+  teeProcess,
+  collectOutput,
+  collectErrors,
+  CatalystCluster,
+  getClusterModuleSource,
+  // Package — registry & addons
+  NpmRegistryClient,
+  AddonRegistry,
+  NpmProcessRunner,
+  // Compat
+  WorkersComplianceGate,
   // Version
   VERSION,
 } from '@aspect/catalyst-core';
@@ -111,4 +151,41 @@ export type {
   SyncMessage,
   ConnectionState,
   SyncResult,
+  EngineType,
+  // Engines
+  NativeEngineConfig,
+  TieredEngineConfig,
+  // Validation
+  ValidationResult,
+  ValidatorConfig,
+  ASTCheckResult,
+  ASTViolation,
+  ImportValidationResult,
+  BlockedImport,
+  SandboxRunResult,
+  SandboxRunConfig,
+  // HTTP
+  RequestHandler,
+  SerializedHTTPRequest,
+  SerializedHTTPResponse,
+  // DNS
+  DNSConfig,
+  // TCP / TLS
+  TCPConnectionOptions,
+  TLSConnectionOptions,
+  // Cluster
+  ClusterWorker,
+  ClusterSettings,
+  // Package — registry & addons
+  NpmRegistryConfig,
+  PackageMetadata,
+  InstallResult,
+  AddonEntry,
+  NpmProcessRunnerConfig,
+  ScriptRunResult,
+  ScriptPhase,
+  // Compat
+  ComplianceResult,
+  ComplianceError,
+  ComplianceWarning,
 } from '@aspect/catalyst-core';
