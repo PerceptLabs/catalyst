@@ -53,5 +53,5 @@ export type { ConflictInfo, ConflictResolution, ConflictStrategy } from './sync/
 export { PROTOCOL_VERSION, generateOpId } from './sync/index.js';
 export type { FileOperation, SyncMessage, ConnectionState, SyncResult } from './sync/index.js';
 export { Catalyst, createRuntime } from './catalyst.js';
-export type { CatalystConfig } from './catalyst.js';
+export type { CatalystConfig, EngineType } from './catalyst.js';
 

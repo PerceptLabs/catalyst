@@ -6,7 +6,8 @@
  */
 import { CatalystFS } from './fs/CatalystFS.js';
 import { CatalystEngine, type EngineConfig } from './engine/CatalystEngine.js';
-import type { IEngine, EngineFactory, ModuleLoaderFactory } from './engine/interfaces.js';
+import type { IEngine, EngineFactory, EngineInstanceConfig, ModuleLoaderFactory } from './engine/interfaces.js';
+import { NativeEngine } from './engines/native/NativeEngine.js';
 import { FetchProxy, type FetchProxyConfig } from './net/FetchProxy.js';
 import { ProcessManager } from './proc/ProcessManager.js';
 import { PackageManager, type PackageManagerConfig } from './pkg/PackageManager.js';
@@ -161,13 +162,36 @@ export class Catalyst {
   }
 }
 
+/** Engine type selector for createRuntime */
+export type EngineType = 'quickjs' | 'native';
+
 /**
  * createRuntime — Convenience factory for creating a Catalyst instance
  * with custom engine and module loader factories.
  *
  * This is the primary entry point for distribution packages that want
  * to wire a specific engine + loader combination.
+ *
+ * @param config - Catalyst configuration
+ * @param engineType - Engine to use: 'quickjs' (default) or 'native'
  */
-export async function createRuntime(config: CatalystConfig = {}): Promise<Catalyst> {
+export async function createRuntime(
+  config: CatalystConfig = {},
+  engineType: EngineType = 'quickjs',
+): Promise<Catalyst> {
+  if (engineType === 'native' && !config.engineFactory) {
+    config = {
+      ...config,
+      engineFactory: (cfg: EngineInstanceConfig) => NativeEngine.create({
+        fs: cfg.fs as CatalystFS | undefined,
+        fetchProxy: cfg.net as FetchProxy | undefined,
+        moduleLoader: cfg.moduleLoader,
+        memoryLimit: cfg.memoryLimit,
+        timeout: cfg.timeout,
+        env: cfg.env,
+        cwd: cfg.cwd,
+      }),
+    };
+  }
   return Catalyst.create(config);
 }
