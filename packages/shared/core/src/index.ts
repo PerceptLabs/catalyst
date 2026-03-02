@@ -83,6 +83,8 @@ export { NpmRegistryClient } from './pkg/index.js';
 export type { NpmRegistryConfig, PackageMetadata, InstallResult } from './pkg/index.js';
 export { AddonRegistry } from './pkg/index.js';
 export type { AddonEntry } from './pkg/index.js';
+export { NpmProcessRunner } from './pkg/index.js';
+export type { NpmProcessRunnerConfig, ScriptRunResult, ScriptPhase } from './pkg/index.js';
 
 // Compat — Workers compliance
 export { WorkersComplianceGate } from './compat/index.js';

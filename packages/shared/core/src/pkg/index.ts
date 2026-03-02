@@ -16,3 +16,5 @@ export { NpmRegistryClient } from './NpmRegistryClient.js';
 export type { NpmRegistryConfig, PackageMetadata, RegistryVersionInfo, InstallResult } from './NpmRegistryClient.js';
 export { AddonRegistry } from './AddonRegistry.js';
 export type { AddonEntry } from './AddonRegistry.js';
+export { NpmProcessRunner } from './NpmProcessRunner.js';
+export type { NpmProcessRunnerConfig, ScriptRunResult, ScriptPhase } from './NpmProcessRunner.js';
