@@ -63,6 +63,31 @@ export type {
   SandboxRunResult, SandboxRunConfig,
 } from './validation/index.js';
 
+// Net — HTTP, DNS, TCP, TLS
+export { CatalystHTTPServer, createHTTPServer, getHTTPModuleSource } from './net/index.js';
+export type { RequestHandler, SerializedHTTPRequest, SerializedHTTPResponse } from './net/index.js';
+export { CatalystDNS, getDNSModuleSource } from './net/index.js';
+export type { DNSConfig } from './net/index.js';
+export { CatalystTCPSocket, CatalystTCPServer, createConnection, getNetModuleSource } from './net/index.js';
+export type { TCPConnectionOptions } from './net/index.js';
+export { tlsConnect, createTLSServer, getTLSModuleSource } from './net/index.js';
+export type { TLSConnectionOptions } from './net/index.js';
+
+// Process — pipelines, cluster
+export { pipeProcesses, pipeToFile, pipeFromFile, teeProcess, collectOutput, collectErrors } from './proc/index.js';
+export { CatalystCluster, getClusterModuleSource } from './proc/index.js';
+export type { ClusterWorker, ClusterSettings } from './proc/index.js';
+
+// Package — registry client, addon registry
+export { NpmRegistryClient } from './pkg/index.js';
+export type { NpmRegistryConfig, PackageMetadata, InstallResult } from './pkg/index.js';
+export { AddonRegistry } from './pkg/index.js';
+export type { AddonEntry } from './pkg/index.js';
+
+// Compat — Workers compliance
+export { WorkersComplianceGate } from './compat/index.js';
+export type { ComplianceResult, ComplianceError, ComplianceWarning } from './compat/index.js';
+
 export { Catalyst, createRuntime } from './catalyst.js';
 export type { CatalystConfig, EngineType } from './catalyst.js';
 
