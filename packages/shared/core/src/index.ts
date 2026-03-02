@@ -52,6 +52,15 @@ export { ConflictResolver, } from './sync/index.js';
 export type { ConflictInfo, ConflictResolution, ConflictStrategy } from './sync/index.js';
 export { PROTOCOL_VERSION, generateOpId } from './sync/index.js';
 export type { FileOperation, SyncMessage, ConnectionState, SyncResult } from './sync/index.js';
+// Validation — Tier 0 security gate
+export { CodeValidator, checkCode, validateImports, runInSandbox } from './validation/index.js';
+export type {
+  ValidationResult, ValidatorConfig,
+  ASTCheckResult, ASTViolation,
+  ImportValidationResult, BlockedImport,
+  SandboxRunResult, SandboxRunConfig,
+} from './validation/index.js';
+
 export { Catalyst, createRuntime } from './catalyst.js';
 export type { CatalystConfig, EngineType } from './catalyst.js';
 
