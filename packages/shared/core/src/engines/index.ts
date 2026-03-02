@@ -13,6 +13,9 @@ export type { NativeEngineConfig } from './native/index.js';
 export { NativeModuleLoader } from './native/index.js';
 export { getWorkerBootstrapSource, getShadowGlobalsCode, getNodeGlobalsCode } from './native/index.js';
 
+export { TieredEngine } from './TieredEngine.js';
+export type { TieredEngineConfig } from './TieredEngine.js';
+
 export type {
   IEngine,
   IModuleLoader,

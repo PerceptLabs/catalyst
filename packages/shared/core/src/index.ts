@@ -24,6 +24,8 @@ export { QuickJSEngine } from './engines/index.js';
 export { NativeEngine } from './engines/index.js';
 export type { NativeEngineConfig } from './engines/index.js';
 export { NativeModuleLoader } from './engines/index.js';
+export { TieredEngine } from './engines/index.js';
+export type { TieredEngineConfig } from './engines/index.js';
 export { FetchProxy } from './net/index.js';
 export type { FetchProxyConfig, SerializedRequest, SerializedResponse } from './net/index.js';
 export { ProcessManager, CatalystProcess } from './proc/index.js';
