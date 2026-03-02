@@ -18,6 +18,9 @@ export type {
   ModuleLoaderCapabilities,
   ModuleLoaderConfig,
 } from './engine/index.js';
+
+// Engines — new tiered engine architecture
+export { QuickJSEngine } from './engines/index.js';
 export { FetchProxy } from './net/index.js';
 export type { FetchProxyConfig, SerializedRequest, SerializedResponse } from './net/index.js';
 export { ProcessManager, CatalystProcess } from './proc/index.js';
