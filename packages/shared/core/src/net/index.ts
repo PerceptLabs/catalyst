@@ -9,3 +9,8 @@ export {
 } from './FetchProxy.js';
 export type { SerializedRequest, SerializedResponse } from './FetchProxy.js';
 export type { PreviewConfig, FetchProxyConfig } from './types.js';
+export { CatalystHTTPServer, createHTTPServer, getHTTPModuleSource } from './CatalystHTTP.js';
+export type {
+  RequestHandler, SerializedHTTPRequest, SerializedHTTPResponse,
+  CatalystIncomingMessage, CatalystServerResponse,
+} from './CatalystHTTP.js';
